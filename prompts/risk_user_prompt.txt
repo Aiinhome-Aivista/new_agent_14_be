@@ -1,0 +1,11 @@
+Project ID: {project_id}
+Context Data: 
+{context_data}
+
+Existing Risks:
+{current_risks}
+
+Analyze the provided context. Identify any new risks or updates to existing risks.
+Specifically call out any immediate escalations or showstopper blockers.
+Provide your response as a JSON object matching this schema:
+{schema}

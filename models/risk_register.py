@@ -12,6 +12,7 @@ class RiskRegister(Base):
     description = Column(Text, nullable=False)
     severity = Column(String(50), nullable=False) # Critical, High, Medium, Low
     status = Column(String(50), nullable=False) # Open, Mitigated, Closed
+    owner = Column(String(100), default='Unassigned', nullable=True)
     mitigation_plan = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -24,6 +25,7 @@ class RiskRegister(Base):
             'description': self.description,
             'severity': self.severity,
             'status': self.status,
+            'owner': self.owner or 'Unassigned',
             'mitigation_plan': self.mitigation_plan,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

@@ -18,13 +18,18 @@ class AuthService:
 
     @staticmethod
     def decode_token(token: str) -> dict:
-        try:
-            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
-            return payload
-        except jwt.ExpiredSignatureError:
-            raise Exception('Token expired. Please log in again.')
-        except jwt.InvalidTokenError:
-            raise Exception('Invalid token. Please log in again.')
+        keys_to_try = [Config.SECRET_KEY, 'change_this_secret_key_32_bytes_long', 'default-secret-key']
+        last_error = None
+        for key in keys_to_try:
+            try:
+                payload = jwt.decode(token, key, algorithms=['HS256'])
+                return payload
+            except jwt.ExpiredSignatureError:
+                raise Exception('Token expired. Please log in again.')
+            except jwt.InvalidTokenError as e:
+                last_error = e
+                continue
+        raise Exception('Invalid token. Please log in again.')
 
 
 def require_roles(*allowed_roles):

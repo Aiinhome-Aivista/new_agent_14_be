@@ -109,17 +109,33 @@ class RiskAgent(BaseAgent):
             schema=json.dumps(schema_json, indent=2)
         )
         
-        # Call LLM with graceful fallback
+        # Tree-of-Thoughts (ToT) multi-branch reasoning prompt
+        tot_prompt = f"""[Tree-of-Thoughts Multi-Branch Analysis]
+Project ID: {input_obj.project_id}
+Context: {input_obj.context_data}
+
+Explore 3 distinct reasoning branches:
+- Branch 1 (Technical & Architecture): System latency, API bottlenecks, SSL/Infrastructure dependencies.
+- Branch 2 (Governance & Regulatory): Security audit findings, compliance gaps (PCI-DSS/IAM), steering policy violations.
+- Branch 3 (Vendor & Delivery Operations): Milestone schedule delays, contractor cost burn, SLA penalties.
+
+Synthesize the strongest leaf nodes from all branches into high-confidence detected_risks, escalations, and blockers.
+Output JSON conforming to schema:
+{json.dumps(schema_json, indent=2)}
+"""
+        
+        # Call LLM with graceful fallback and high-tier routing
         is_fallback = False
         try:
             response_text = llm.generate(
-                prompt=prompt,
+                prompt=tot_prompt,
                 system=get_risk_system_prompt(),
-                format="json"
+                format="json",
+                tier="high"
             )
         except Exception as exc:
             is_fallback = True
-            logger.warning(f"[{self.agent_id}] LLM generation failed: {exc}, using fallback risk analysis")
+            logger.warning(f"[{self.agent_id}] High-tier LLM generation failed: {exc}, using fallback risk analysis")
             fallback_risk_id = f"R-{int(time.time()) % 900 + 100}"
             response_text = json.dumps({
                 "detected_risks": [

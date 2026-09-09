@@ -16,12 +16,20 @@ class LLMClient:
         self.api_url = api_url
         self.model = model
 
-    def generate(self, prompt: str, system: Optional[str] = None, format: Optional[str] = None, **kwargs) -> str:
+    def _resolve_model(self, tier: Optional[str] = None) -> str:
+        if tier == "high":
+            return getattr(Config, 'LLM_MODEL_HIGH_TIER', self.model)
+        elif tier == "mid":
+            return getattr(Config, 'LLM_MODEL_MID_TIER', self.model)
+        return self.model
+
+    def generate(self, prompt: str, system: Optional[str] = None, format: Optional[str] = None, tier: Optional[str] = None, **kwargs) -> str:
         """
-        Sends a generation request to the LLM.
+        Sends a generation request to the LLM with dynamic tier routing.
         """
+        selected_model = self._resolve_model(tier)
         payload = {
-            "model": self.model,
+            "model": selected_model,
             "prompt": prompt,
             "stream": False
         }
@@ -37,23 +45,24 @@ class LLMClient:
             payload.update(kwargs)
 
         try:
-            response = requests.post(self.api_url, json=payload, timeout=(4, 20))
+            response = requests.post(self.api_url, json=payload, timeout=(10, 900))
             response.raise_for_status()
             
             data = response.json()
             return data.get("response", "")
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error calling LLM API: {e}")
+            logger.error(f"Error calling LLM API ({selected_model}): {e}")
             raise Exception(f"Failed to communicate with LLM API: {e}")
 
-    def stream_generate(self, prompt: str, system: Optional[str] = None, format: Optional[str] = None, **kwargs):
+    def stream_generate(self, prompt: str, system: Optional[str] = None, format: Optional[str] = None, tier: Optional[str] = None, **kwargs):
         """
-        Streams tokens from Ollama-compatible /api/generate endpoint if supported.
+        Streams tokens from Ollama-compatible /api/generate endpoint with dynamic tier routing.
         Yields token strings as they arrive.
         """
+        selected_model = self._resolve_model(tier)
         payload = {
-            "model": self.model,
+            "model": selected_model,
             "prompt": prompt,
             "stream": True
         }
@@ -68,7 +77,7 @@ class LLMClient:
             payload.update(kwargs)
 
         try:
-            response = requests.post(self.api_url, json=payload, stream=True, timeout=(4, 30))
+            response = requests.post(self.api_url, json=payload, stream=True, timeout=(10, 180))
             response.raise_for_status()
             for line in response.iter_lines():
                 if line:

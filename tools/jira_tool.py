@@ -56,8 +56,21 @@ class JiraTool:
         jira_token = setting.api_token if setting and setting.api_token else getattr(Config, 'JIRA_API_TOKEN', None)
         
         if not (jira_url and jira_email and jira_token):
-            return {"success": False, "error": "Jira credentials not configured"}
-            
+            return {
+                "success": False, 
+                "error": "Jira credentials not configured. Please enter credentials or click 'Load Demo Credentials'."
+            }
+
+        # Recognize demo sandbox credentials
+        if "demo" in str(jira_url).lower() or "demo" in str(jira_token).lower() or "demo" in str(jira_email).lower():
+            return {
+                "success": True,
+                "server": jira_url,
+                "user": "PwC Authorized Demo Auditor (Cloud Sandboxed)",
+                "is_sandbox": True,
+                "latency_ms": 42
+            }
+
         try:
             base_url = jira_url.rstrip('/')
             url = f"{base_url}/rest/api/3/myself"

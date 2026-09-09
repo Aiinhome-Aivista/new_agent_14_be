@@ -36,10 +36,9 @@ class FinancialAgent:
         
         Provide the 'analysis' field in JSON format along with the exact variance, variance_percentage, and status.
         """
-        
-        response = llm.generate(prompt, system=get_financial_system_prompt(), format="json")
-        
+
         try:
+            response = llm.generate(prompt, system=get_financial_system_prompt(), format="json")
             parsed = json.loads(response)
             # Ensure calculations are correct regardless of LLM
             parsed['variance'] = variance

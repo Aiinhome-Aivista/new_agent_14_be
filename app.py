@@ -41,6 +41,10 @@ def create_app():
     def health_check():
         return {'status': 'healthy', 'message': 'VPM Backend is running'}, 200
 
+    # Start Background Scheduler
+    from services.scheduler_service import SchedulerService
+    SchedulerService.get_instance(app).start()
+
     return app
 
 if __name__ == '__main__':

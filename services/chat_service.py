@@ -22,10 +22,17 @@ class ChatService:
                 logger.warning(f"RAG retrieval error in stream_chat: {rag_err}")
                 context = ""
 
-            prompt = f"Context:\n{context}\n\nUser Query: {query}\n\nProvide a helpful, precise response based on the context and project data."
+            prompt = f"""Program Knowledge & Context:
+{context}
+
+User Query: {query}
+
+Instructions:
+Provide a clear, user-friendly, and professional answer in natural language using clean bullet points and concise paragraphs.
+Do NOT output JSON or braces. Output plain natural language directly."""
             system = get_chat_system_prompt()
 
-            for token in llm.stream_generate(prompt, system=system):
+            for token in llm.stream_generate(prompt, system=system, tier="mid"):
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
         except GeneratorExit:

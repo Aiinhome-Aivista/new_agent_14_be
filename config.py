@@ -22,9 +22,11 @@ class Config:
     SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # LLM
+    # LLM Tiering
     LLM_API_URL = os.getenv('LLM_API_URL', 'http://122.163.121.176:3041/api/generate')
     LLM_MODEL = os.getenv('LLM_MODEL', 'mistral-small:24b')
+    LLM_MODEL_HIGH_TIER = os.getenv('LLM_MODEL_HIGH_TIER', 'mistral-small:24b')
+    LLM_MODEL_MID_TIER = os.getenv('LLM_MODEL_MID_TIER', 'mistral:latest')
 
     # Jira
     JIRA_URL = os.getenv('JIRA_URL')

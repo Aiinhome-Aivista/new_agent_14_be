@@ -182,7 +182,16 @@ class IngestionService:
         # Determine overall AI processing status across pipeline agents
         intake_status = final_state.get("intake", {}).get("ai_processing_status")
         risk_status = risk_output.get("ai_processing_status")
-        ai_proc_status = "degraded_fallback" if (intake_status == "degraded_fallback" or risk_status == "degraded_fallback") else "success"
+        financial_status = final_state.get("financial", {}).get("ai_processing_status")
+        kpi_status = final_state.get("kpi", {}).get("ai_processing_status")
+        predictive_status = final_state.get("predictive", {}).get("ai_processing_status")
+        ai_proc_status = "degraded_fallback" if (
+            intake_status == "degraded_fallback"
+            or risk_status == "degraded_fallback"
+            or financial_status == "degraded_fallback"
+            or kpi_status == "degraded_fallback"
+            or predictive_status == "degraded_fallback"
+        ) else "success"
 
         # Save snapshot
         snapshot_data = final_state.get("reporting", {}).get("dashboard_data", {})

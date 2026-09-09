@@ -33,10 +33,12 @@ Return JSON ONLY matching schema:
         try:
             response = llm.generate(reflexion_prompt, system=get_predictive_system_prompt(), format="json", tier="high")
             parsed = json.loads(response)
+            parsed["ai_processing_status"] = "success"
             return parsed
         except Exception:
             return {
                 "forecasted_variance": inputs.get("current_variance", 0.0),
                 "confidence_score": 82,
-                "forecast_narrative": "Trajectory converged through Reflexion critique against risk register and current burn acceleration."
+                "forecast_narrative": "Trajectory converged through Reflexion critique against risk register and current burn acceleration.",
+                "ai_processing_status": "degraded_fallback"
             }

@@ -44,11 +44,13 @@ class FinancialAgent:
             parsed['variance'] = variance
             parsed['variance_percentage'] = variance_percentage
             parsed['status'] = status
+            parsed['ai_processing_status'] = "success"
             return parsed
         except Exception:
             return {
                 "variance": variance,
                 "variance_percentage": variance_percentage,
                 "status": status,
-                "analysis": f"Budget is {status.lower()} with a variance of {variance}."
+                "analysis": f"Budget is {status.lower()} with a variance of {variance}.",
+                "ai_processing_status": "degraded_fallback"
             }

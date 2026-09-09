@@ -28,11 +28,13 @@ class KPIAgent:
         try:
             response = llm.generate(prompt, system=get_kpi_system_prompt(), format="json")
             parsed = json.loads(response)
+            parsed["ai_processing_status"] = "success"
             return parsed
         except Exception:
             return {
                 "kpis": [
                     {"metric_name": "Budget Variance", "metric_value": float(inputs.get("variance", 0.0) or 0.0), "trend": 0.0, "trend_label": "stable"},
                     {"metric_name": "Forecast Confidence", "metric_value": float(inputs.get("forecast_confidence", 78) or 78), "trend": 0.0, "trend_label": "stable"}
-                ]
+                ],
+                "ai_processing_status": "degraded_fallback"
             }

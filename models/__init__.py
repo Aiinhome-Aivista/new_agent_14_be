@@ -8,3 +8,4 @@ from .kpi import KPI
 from .dashboard_snapshot import DashboardSnapshot
 from .approval_queue import ApprovalQueue
 from .agent_run_log import AgentRunLog
+from .uploaded_document import UploadedDocument

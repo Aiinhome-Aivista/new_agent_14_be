@@ -7,11 +7,14 @@ class AuthService:
     Handles JWT generation and verification.
     """
     @staticmethod
-    def generate_token(role: str, user_id: str = "demo_user") -> str:
+    def generate_token(role: str, user_id: str = "demo_user", email: str = None) -> str:
+        user_email = email or (user_id if '@' in str(user_id) else None)
         payload = {
             'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1),
             'iat': datetime.datetime.utcnow(),
-            'sub': user_id,
+            'sub': user_email or user_id,
+            'user_id': user_id,
+            'email': user_email,
             'role': role
         }
         return jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')

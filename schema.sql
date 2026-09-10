@@ -180,6 +180,22 @@ CREATE TABLE integration_settings (
 	UNIQUE (provider)
 );
 
+CREATE TABLE uploaded_documents (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	filename VARCHAR(255) NOT NULL,
+	file_type VARCHAR(50) NOT NULL,
+	file_size_bytes INTEGER NOT NULL,
+	file_size_formatted VARCHAR(50),
+	uploaded_by VARCHAR(255) NOT NULL,
+	uploaded_by_role VARCHAR(50),
+	project_id INTEGER,
+	status VARCHAR(50) DEFAULT 'Indexed in Vector Memory',
+	risks_detected INTEGER DEFAULT 0,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	FOREIGN KEY (project_id) REFERENCES projects (id)
+);
+
 -- ==========================================
 -- DEFAULT INITIAL SEED DATA
 -- ==========================================

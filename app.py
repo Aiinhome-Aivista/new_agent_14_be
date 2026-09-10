@@ -21,11 +21,6 @@ def create_app():
     # Initialize Database
     init_db(app)
 
-    # Ensure IntegrationSetting is known before create_all
-    from models.integration_setting import IntegrationSetting
-    import db
-    db.Base.metadata.create_all(bind=db.engine)
-
     # Register Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(ingestion_bp, url_prefix='/api/ingestion')

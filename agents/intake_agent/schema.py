@@ -21,11 +21,22 @@ class ExtractedRisk(BaseModel):
     description: Optional[str] = ""
     severity: Optional[str] = "Medium"
 
+class ExtractedMilestone(BaseModel):
+    id: Optional[str] = None
+    name: str
+    timeline: Optional[str] = "Scheduled"
+    status: Optional[str] = "Locked"
+    trancheAmount: Optional[float] = 0.0
+    deliverablesPercent: Optional[int] = 0
+    slaScore: Optional[int] = None
+    slaStatus: Optional[str] = "Scheduled"
+
 class IntakeOutput(BaseModel):
     project_name: str = Field(default="Alpha Migration Program", description="Name of the project")
     jira_key: Optional[str] = Field(default="PRJ-101", description="Jira key if mentioned")
     status: str = Field(default="Active")
     risks: List[ExtractedRisk] = []
+    milestones: Optional[List[ExtractedMilestone]] = []
     budget_planned: float = 0.0
     budget_actual: float = 0.0
 
@@ -50,5 +61,21 @@ class IntakeOutput(BaseModel):
                             "severity": r.get("severity") or "Medium"
                         })
             data['risks'] = normalized
+            raw_ms = data.get('milestones', [])
+            norm_ms = []
+            if isinstance(raw_ms, list):
+                for idx, m in enumerate(raw_ms):
+                    if isinstance(m, dict):
+                        norm_ms.append({
+                            "id": m.get("id") or f"M-0{idx + 1}",
+                            "name": m.get("name") or f"Phase {idx + 1} Deliverable",
+                            "timeline": m.get("timeline") or m.get("date") or "Scheduled",
+                            "status": m.get("status") or "Locked",
+                            "trancheAmount": float(m.get("trancheAmount") or m.get("amount") or 0.0),
+                            "deliverablesPercent": int(m.get("deliverablesPercent") or 0),
+                            "slaScore": m.get("slaScore"),
+                            "slaStatus": m.get("slaStatus") or "Scheduled"
+                        })
+            data['milestones'] = norm_ms
         return data
 

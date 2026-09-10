@@ -200,6 +200,18 @@ class IngestionService:
             snapshot_data["jira_synced"] = jira_data.get("success", False)
             snapshot_data["jira_issues_count"] = len(jira_issues)
 
+            # Dynamic Milestone Attainment & Tranche Handling
+            intake_milestones = final_state.get("intake", {}).get("milestones", [])
+            if intake_milestones and len(intake_milestones) > 0:
+                snapshot_data["milestones"] = intake_milestones
+            else:
+                # Retain existing milestone telemetry from previous snapshot if not overridden by SOW
+                prev_snap = db.db_session.query(DashboardSnapshot).order_by(DashboardSnapshot.created_at.desc()).first()
+                if prev_snap:
+                    prev_data = prev_snap.to_dict().get("data", {})
+                    if isinstance(prev_data, dict) and prev_data.get("milestones"):
+                        snapshot_data["milestones"] = prev_data["milestones"]
+
         snapshot = DashboardSnapshot(
             program_id=prog_id,
             data=snapshot_data

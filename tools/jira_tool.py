@@ -89,10 +89,17 @@ class JiraTool:
             if response.status_code == 200:
                 user_info = response.json()
                 display_name = user_info.get("displayName") or user_info.get("emailAddress") or jira_email
+                avatars = user_info.get("avatarUrls") or {}
+                avatar_url = avatars.get("48x48") or avatars.get("32x32") or avatars.get("24x24") or ""
                 return {
                     "success": True,
                     "server": base_url,
-                    "user": display_name
+                    "user": display_name,
+                    "email": user_info.get("emailAddress") or jira_email,
+                    "account_id": user_info.get("accountId"),
+                    "avatar_url": avatar_url,
+                    "time_zone": user_info.get("timeZone"),
+                    "account_type": user_info.get("accountType")
                 }
             else:
                 return {

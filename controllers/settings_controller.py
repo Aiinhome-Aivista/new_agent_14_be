@@ -68,9 +68,16 @@ def get_all_settings():
                 "provider": prov,
                 "base_url": "",
                 "username_email": "",
+                "is_connected": False,
+                "has_token": False,
                 "updated_at": None
             }
-    return jsonify(results)
+    return jsonify({
+        "success": True,
+        "settings": list(results.values()),
+        "data": results,
+        **results
+    })
 
 @settings_bp.route('/<provider>', methods=['GET'])
 @require_roles('PMO', 'Program Director')
@@ -82,6 +89,8 @@ def get_provider_settings(provider):
         "provider": provider,
         "base_url": "",
         "username_email": "",
+        "is_connected": False,
+        "has_token": False,
         "updated_at": None
     })
 
@@ -102,9 +111,11 @@ def save_provider_settings(provider):
     setting.username_email = email
     if token:
         setting.api_token = token
+    if base_url and email:
+        setting.is_connected = True
         
     db.db_session.commit()
-    return jsonify({"success": True, "message": f"{provider} settings saved successfully", "data": setting.to_dict()})
+    return jsonify({"success": True, "message": f"{provider} settings saved and connected successfully", "data": setting.to_dict()})
 
 @settings_bp.route('/<provider>/test-connection', methods=['POST'])
 @require_roles('PMO', 'Program Director')
@@ -113,7 +124,26 @@ def test_provider_connection(provider):
     if not tool:
         return jsonify({"success": False, "error": f"Unknown connector provider: {provider}"}), 400
     result = tool.test_connection()
+    if result.get("success"):
+        setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
+        if setting:
+            setting.is_connected = True
+            db.db_session.commit()
     return jsonify(result)
+
+@settings_bp.route('/<provider>/disconnect', methods=['POST'])
+@require_roles('PMO', 'Program Director')
+def disconnect_provider(provider):
+    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
+    if setting:
+        setting.is_connected = False
+        db.db_session.commit()
+    return jsonify({
+        "success": True, 
+        "message": f"{provider} disconnected successfully.",
+        "provider": provider,
+        "is_connected": False
+    })
 
 @settings_bp.route('/demo-presets', methods=['POST'])
 @require_roles('PMO', 'Program Director')
@@ -133,12 +163,13 @@ def load_demo_presets():
         setting.base_url = preset["base_url"]
         setting.username_email = preset["username_email"]
         setting.api_token = preset["api_token"]
+        setting.is_connected = True
         seeded[prov] = setting.to_dict()
         
     db.db_session.commit()
     return jsonify({
         "success": True, 
-        "message": f"Demo sandbox credentials loaded for {', '.join(providers_to_seed)}",
+        "message": f"Demo sandbox credentials loaded and connected for {', '.join(providers_to_seed)}",
         "data": seeded
     })
 

@@ -174,6 +174,7 @@ CREATE TABLE integration_settings (
 	base_url VARCHAR(255), 
 	username_email VARCHAR(255), 
 	api_token VARCHAR(255), 
+	is_connected BOOLEAN DEFAULT FALSE,
 	updated_at DATETIME, 
 	PRIMARY KEY (id), 
 	UNIQUE (provider)

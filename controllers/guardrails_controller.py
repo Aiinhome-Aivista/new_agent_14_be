@@ -114,8 +114,48 @@ def resolve_queue_item(item_id):
     item.reasoning = reasoning
     item.resolved_at = datetime.now(timezone.utc)
     db.db_session.commit()
+
+    jira_info = None
+    if decision == 'Approved' and item.action_type in ('escalate_risk', 'risk_escalation'):
+        try:
+            from tools.jira_tool import JiraTool
+            from models.project import Project
+            from models.risk_register import RiskRegister
+
+            payload = dict(item.payload or {}) if isinstance(item.payload, dict) else {}
+            p_id = payload.get("project_id", 1)
+            proj = db.db_session.query(Project).filter_by(id=p_id).first()
+            j_key = proj.jira_key if proj else "PRJ-101"
+            
+            esc_data = payload.get("escalation", {})
+            title = esc_data.get("title", f"Approved Escalation for Project {p_id}") if isinstance(esc_data, dict) else str(esc_data)
+            jira_res = JiraTool.create_issue(
+                project_key=j_key,
+                summary=f"[Approved Escalation] {title}",
+                description=f"Automated risk escalation approved by PMO / Program Director.\nReason: {reasoning}",
+                issue_type="Bug",
+                priority="High"
+            )
+            jira_info = jira_res
+            if jira_res and jira_res.get("key"):
+                jira_key_created = jira_res.get("key")
+                payload["jira_issue_key"] = jira_key_created
+                payload["jira_url"] = jira_res.get("url")
+                item.payload = payload
+
+                # If there's an associated risk in risk_register, link it as well
+                risk_rec = db.db_session.query(RiskRegister).filter(
+                    RiskRegister.project_id == p_id,
+                    RiskRegister.title.ilike(f"%{str(title)[:30]}%")
+                ).first()
+                if risk_rec and not risk_rec.jira_issue_key:
+                    risk_rec.jira_issue_key = jira_key_created
+
+                db.db_session.commit()
+        except Exception:
+            pass
     
-    return jsonify({"success": True, "item": item.to_dict()})
+    return jsonify({"success": True, "item": item.to_dict(), "jira": jira_info})
 
 @guardrails_bp.route('/policies', methods=['POST'])
 @require_roles('Program Director', 'PMO')

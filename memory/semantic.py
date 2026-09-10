@@ -31,16 +31,28 @@ class SemanticMemory:
             ids=ids
         )
         
-    def search(self, collection_name: str, query: str, n_results: int = 5):
+    def search(self, collection_name: str, query: str, n_results: int = 5, where: dict = None):
         """
-        Searches semantic memory for relevant context.
+        Searches semantic memory for relevant context with metadata partition filtering.
         """
         collection = self.get_or_create_collection(collection_name)
-        results = collection.query(
-            query_texts=[query],
-            n_results=n_results
-        )
+        kwargs = {
+            "query_texts": [query],
+            "n_results": n_results
+        }
+        if where:
+            kwargs["where"] = where
+        results = collection.query(**kwargs)
         return results
+
+    def get(self, collection_name: str, where: dict = None):
+        """
+        Retrieves documents from collection with optional metadata partition filter.
+        """
+        collection = self.get_or_create_collection(collection_name)
+        if where:
+            return collection.get(where=where)
+        return collection.get()
 
 # Global instance
 semantic_memory = SemanticMemory()

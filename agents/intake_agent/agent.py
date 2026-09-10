@@ -47,15 +47,52 @@ class IntakeAgent:
 
         # Index into ChromaDB semantic memory for RAG and Knowledge Base
         try:
+            import re
+            def recursive_chunk_text(text: str, target_size: int = 500, overlap: int = 60):
+                if not text or not text.strip():
+                    return ["Empty document"]
+                paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+                chunks = []
+                current = ""
+                for p in paragraphs:
+                    if len(current) + len(p) + 2 <= target_size:
+                        current = (current + "\n\n" + p).strip()
+                    else:
+                        if current:
+                            chunks.append(current)
+                            tail = current[-overlap:] if len(current) > overlap else current
+                            current = (tail + " " + p).strip() if len(tail) + len(p) <= target_size else p
+                        else:
+                            sentences = re.split(r'(?<=[.!?])\s+', p)
+                            sub = ""
+                            for s in sentences:
+                                if len(sub) + len(s) + 1 <= target_size:
+                                    sub = (sub + " " + s).strip()
+                                else:
+                                    if sub:
+                                        chunks.append(sub)
+                                    sub = s
+                            if sub:
+                                current = sub
+                if current:
+                    chunks.append(current)
+                return chunks if chunks else [text[:target_size]]
+
             filename = os.path.basename(file_path) if file_path else "unknown_doc"
-            # Chunk document into ~400 character windows
-            chunk_size = 400
-            chunks = [document_text[i:i + chunk_size] for i in range(0, len(document_text), chunk_size)] if document_text else ["Empty document"]
+            chunks = recursive_chunk_text(document_text, target_size=500, overlap=60)
             timestamp_str = str(int(time.time()))
+
+            doc_lines = [l.strip() for l in document_text.split('\n') if l.strip()]
+            first_line = doc_lines[0] if doc_lines else filename
+            clean_title = re.sub(r'^[#*\-\d.\s]+', '', first_line)[:100].strip() or filename
+
             ids = [f"{filename}_chunk_{i}_{timestamp_str}" for i in range(len(chunks))]
             metadatas = [
                 {
                     "source": filename,
+                    "filename": filename,
+                    "title": clean_title,
+                    "project_id": str(project_id),
                     "chunk_index": i,
                     "timestamp": timestamp_str,
                     "total_chunks": len(chunks)
@@ -68,7 +105,7 @@ class IntakeAgent:
                 metadatas=metadatas,
                 ids=ids
             )
-            logger.info(f"Indexed {len(chunks)} chunks from {filename} into semantic memory.")
+            logger.info(f"Indexed {len(chunks)} semantic chunks from {filename} into semantic memory.")
         except Exception as err:
             logger.warning(f"Failed to index document to semantic memory: {err}")
 

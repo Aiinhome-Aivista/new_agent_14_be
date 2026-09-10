@@ -13,9 +13,9 @@ settings_bp = Blueprint('settings', __name__)
 DEMO_PRESETS = {
     "jira": {
         "provider": "jira",
-        "base_url": "https://demo-pwc.atlassian.net",
-        "username_email": "demo.pm@pwc-vpm.com",
-        "api_token": "DEMO_JIRA_ATLASSIAN_TOKEN_2026"
+        "base_url": "https://dipakkrsaha44.atlassian.net",
+        "username_email": "dipakkrsaha44@gmail.com",
+        "api_token": "ATATT3xFfGF0o2M-o3hxSh4XCKwBcrLO5EvrYYVjZ-DO60zGU6LuMpqMext-Uwy664taZSs1uS8ifdZaIHboUlaG1gKf5C_1rp6tUhYGt7S1G39ramjutsJwM9RrvvXG71mDV9nfXgRk8gcyPG3YBp1DMgYHOfaxkDJGQ0JQo63jr92dgdpGHIs=07F60D9C"
     },
     "azure_devops": {
         "provider": "azure_devops",
@@ -51,6 +51,8 @@ TOOL_MAP = {
     "notifications": NotificationTool
 }
 
+@settings_bp.route('', methods=['GET'])
+@settings_bp.route('/', methods=['GET'])
 @settings_bp.route('/all', methods=['GET'])
 @require_roles('PMO', 'Program Director')
 def get_all_settings():

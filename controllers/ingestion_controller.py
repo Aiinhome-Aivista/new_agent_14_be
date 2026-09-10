@@ -32,3 +32,31 @@ def upload_file():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@ingestion_bp.route('/history', methods=['GET'])
+@require_roles('PMO', 'Project Manager', 'Program Director', 'Investor')
+def list_ingestion_history():
+    uploads_dir = os.path.join(os.getcwd(), 'uploads')
+    if not os.path.exists(uploads_dir):
+        return jsonify([])
+
+    docs = []
+    import time
+    for fname in sorted(os.listdir(uploads_dir), reverse=True):
+        fpath = os.path.join(uploads_dir, fname)
+        if os.path.isfile(fpath):
+            stat = os.stat(fpath)
+            size_kb = stat.st_size / 1024
+            size_fmt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb / 1024):.2f} MB"
+            ext = os.path.splitext(fname)[1].lstrip('.').upper() or 'TXT'
+            time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))
+            docs.append({
+                "id": fname,
+                "filename": fname,
+                "file_type": ext,
+                "size": size_fmt,
+                "uploaded_at": time_str,
+                "status": "Indexed in Vector Memory",
+                "indexed": True
+            })
+    return jsonify(docs)

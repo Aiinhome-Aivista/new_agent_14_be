@@ -18,6 +18,7 @@ class IntegrationSetting(Base):
             'provider': self.provider,
             'base_url': self.base_url or '',
             'username_email': self.username_email or '',
+            'api_token': self.api_token or '',
             'is_connected': bool(self.is_connected),
             'has_token': bool(self.api_token),
             'updated_at': self.updated_at.isoformat() if self.updated_at else None

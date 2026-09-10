@@ -40,11 +40,11 @@ class LLMClient:
         if format:
             payload["format"] = format
             
+        request_timeout = kwargs.pop('request_timeout', (15, 900))
+        
         # Add any other kwargs like temperature, max_tokens if supported by the backend
         if kwargs:
             payload.update(kwargs)
-
-        request_timeout = kwargs.pop('request_timeout', (10, 900))
 
         try:
             response = requests.post(self.api_url, json=payload, timeout=request_timeout)

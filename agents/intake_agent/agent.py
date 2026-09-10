@@ -26,6 +26,7 @@ class IntakeAgent:
         
         intake_dict = inputs.get("intake") if isinstance(inputs.get("intake"), dict) else {}
         file_path = inputs.get("file_path") or intake_dict.get("file_path")
+        project_id = inputs.get("project_id") or intake_dict.get("project_id") or "1"
         document_text = inputs.get("document_text")
         
         # Read the file if document_text not directly passed

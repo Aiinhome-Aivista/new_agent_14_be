@@ -29,6 +29,6 @@ class Config:
     LLM_MODEL_MID_TIER = os.getenv('LLM_MODEL_MID_TIER', 'mistral:latest')
 
     # Jira
-    JIRA_URL = os.getenv('JIRA_URL')
-    JIRA_EMAIL = os.getenv('JIRA_EMAIL')
-    JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN')
+    JIRA_URL = os.getenv('JIRA_BASE_URL') or os.getenv('JIRA_URL')
+    JIRA_EMAIL = os.getenv('JIRA_EMAIL') or os.getenv('JIRA_USER_EMAIL') or os.getenv('JIRA_USERNAME')
+    JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN') or os.getenv('JIRA_TOKEN')

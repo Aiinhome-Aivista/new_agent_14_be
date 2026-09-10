@@ -13,7 +13,7 @@ settings_bp = Blueprint('settings', __name__)
 DEMO_PRESETS = {
     "jira": {
         "provider": "jira",
-        "base_url": "https://demo-pwc.atlassian.net",
+        "base_url": "https://dipakkrsaha44.atlassian.net",
         "username_email": "demo.pm@pwc-vpm.com",
         "api_token": "DEMO_JIRA_ATLASSIAN_TOKEN_2026"
     },
@@ -51,6 +51,8 @@ TOOL_MAP = {
     "notifications": NotificationTool
 }
 
+@settings_bp.route('', methods=['GET'])
+@settings_bp.route('/', methods=['GET'])
 @settings_bp.route('/all', methods=['GET'])
 @require_roles('PMO', 'Program Director')
 def get_all_settings():

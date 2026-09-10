@@ -79,7 +79,7 @@ class LLMClient:
             payload.update(kwargs)
 
         try:
-            response = requests.post(self.api_url, json=payload, stream=True, timeout=(10, 180))
+            response = requests.post(self.api_url, json=payload, stream=True, timeout=(15, 900))
             response.raise_for_status()
             for line in response.iter_lines():
                 if line:

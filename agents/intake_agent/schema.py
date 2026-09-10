@@ -1,9 +1,10 @@
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Optional
+from typing import List, Optional, Any
 
 class IntakeInput(BaseModel):
     file_path: Optional[str] = Field(None, description="Path to the document to parse")
     intake: Optional[dict] = None
+    project_id: Optional[Any] = 1
 
     @model_validator(mode='before')
     @classmethod
@@ -11,6 +12,8 @@ class IntakeInput(BaseModel):
         if isinstance(data, dict):
             if not data.get('file_path') and 'intake' in data and isinstance(data['intake'], dict):
                 data['file_path'] = data['intake'].get('file_path')
+            if not data.get('project_id') and 'intake' in data and isinstance(data['intake'], dict):
+                data['project_id'] = data['intake'].get('project_id', 1)
         return data
 
 class ExtractedRisk(BaseModel):

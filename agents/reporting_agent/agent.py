@@ -212,9 +212,11 @@ class ReportingAgent:
             parsed = json.loads(response)
             if "narrative_summary" in parsed:
                 narrative = parsed["narrative_summary"]
-            if isinstance(parsed.get("dashboard_data"), dict) and "kpis" in parsed["dashboard_data"]:
-                # Merge with our robust structured data so no role view fields are missing
-                structured_dashboard.update(parsed["dashboard_data"])
+            if isinstance(parsed.get("dashboard_data"), dict):
+                dash = dict(parsed["dashboard_data"])
+                if not dash.get("kpis"):
+                    dash.pop("kpis", None)
+                structured_dashboard.update(dash)
         except Exception as exc:
             logger.warning(f"Reporting LLM generation fallback: {exc}")
             

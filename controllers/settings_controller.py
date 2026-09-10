@@ -102,6 +102,9 @@ def save_provider_settings(provider):
     email = data.get("username_email", "").strip()
     token = data.get("api_token", "").strip()
     
+    if not base_url:
+        return jsonify({"success": False, "error": f"Base URL / Endpoint is required for {provider}."}), 400
+
     setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
     if not setting:
         setting = IntegrationSetting(provider=provider)
@@ -111,11 +114,40 @@ def save_provider_settings(provider):
     setting.username_email = email
     if token:
         setting.api_token = token
-    if base_url and email:
-        setting.is_connected = True
         
-    db.db_session.commit()
-    return jsonify({"success": True, "message": f"{provider} settings saved and connected successfully", "data": setting.to_dict()})
+    # Flush credentials to session so tool.test_connection can evaluate them
+    db.db_session.flush()
+
+    # REAL LIVE CONNECTION VERIFICATION HANDSHAKE
+    tool = TOOL_MAP.get(provider)
+    if not tool:
+        setting.is_connected = False
+        db.db_session.commit()
+        return jsonify({"success": False, "error": f"Unknown connector provider: {provider}"}), 400
+
+    test_result = tool.test_connection()
+    if test_result.get("success"):
+        setting.is_connected = True
+        db.db_session.commit()
+        return jsonify({
+            "success": True, 
+            "is_connected": True,
+            "message": f"Successfully verified and connected to {provider}! Authenticated as {test_result.get('user', 'Verified User')}",
+            "data": setting.to_dict(),
+            "test_result": test_result
+        })
+    else:
+        # FAILED: Strictly reject and do NOT connect invalid / fake data
+        setting.is_connected = False
+        db.db_session.commit()
+        err_msg = test_result.get("error") or "Authentication failed. Invalid credentials or server unreachable."
+        return jsonify({
+            "success": False,
+            "is_connected": False,
+            "error": f"Connection verification failed: {err_msg}",
+            "data": setting.to_dict(),
+            "test_result": test_result
+        }), 400
 
 @settings_bp.route('/<provider>/test-connection', methods=['POST'])
 @require_roles('PMO', 'Program Director')
@@ -123,12 +155,15 @@ def test_provider_connection(provider):
     tool = TOOL_MAP.get(provider)
     if not tool:
         return jsonify({"success": False, "error": f"Unknown connector provider: {provider}"}), 400
+    
     result = tool.test_connection()
-    if result.get("success"):
-        setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
-        if setting:
+    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
+    if setting:
+        if result.get("success"):
             setting.is_connected = True
-            db.db_session.commit()
+        else:
+            setting.is_connected = False
+        db.db_session.commit()
     return jsonify(result)
 
 @settings_bp.route('/<provider>/disconnect', methods=['POST'])

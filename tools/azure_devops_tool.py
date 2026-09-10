@@ -47,14 +47,24 @@ class AzureDevOpsTool:
         if not (ado_url and (ado_pat or ado_email)):
             return {
                 "success": False,
-                "error": "Azure DevOps credentials not configured. Please enter credentials or click 'Load Demo Credentials'."
+                "error": "Azure DevOps Organization URL and Personal Access Token (PAT) are required."
             }
-            
-        # Sandbox detection
-        if "demo" in str(ado_url).lower() or "demo" in str(ado_pat).lower():
+
+        ado_url_str = str(ado_url).strip().rstrip('/')
+        ado_pat_str = str(ado_pat or '').strip()
+
+        # Check URL validity
+        if not ado_url_str.startswith("http"):
+            return {
+                "success": False,
+                "error": f"Invalid Azure DevOps URL format '{ado_url}'. Must be a valid URL like 'https://dev.azure.com/your-org'."
+            }
+
+        # ONLY Official 1-Click Demo Sandbox Preset matches sandbox mode
+        if ado_url_str == "https://dev.azure.com/demo-pwc-enterprise" and ado_pat_str == "DEMO_AZURE_DEVOPS_PAT_2026":
             return {
                 "success": True,
-                "server": ado_url,
+                "server": ado_url_str,
                 "organization": "demo-pwc-enterprise",
                 "user": "PwC DevOps Lead (Sandboxed)",
                 "projects_discovered": ["Alpha-Core-Modernization", "Payment-Gateway-Services"],
@@ -62,21 +72,47 @@ class AzureDevOpsTool:
             }
             
         try:
-            # Live Azure DevOps REST API connection
-            url = f"{ado_url.rstrip('/')}/_apis/projects?api-version=7.0"
-            auth = ('', ado_pat)
-            resp = requests.get(url, auth=auth, timeout=10)
+            # Live Azure DevOps REST API connection verification
+            url = f"{ado_url_str}/_apis/connectionData?api-version=7.0"
+            auth = ('', ado_pat_str)
+            resp = requests.get(url, auth=auth, timeout=8)
+            
+            # Fallback to projects endpoint if connectionData is restricted
+            if resp.status_code == 404:
+                url_alt = f"{ado_url_str}/_apis/projects?api-version=7.0"
+                resp = requests.get(url_alt, auth=auth, timeout=8)
+
             if resp.status_code == 200:
                 data = resp.json()
+                auth_user = data.get("authenticatedUser", {})
+                display_name = (
+                    auth_user.get("providerDisplayName") or 
+                    auth_user.get("customDisplayName") or 
+                    ado_email or 
+                    "Azure DevOps User"
+                )
                 return {
                     "success": True,
-                    "server": ado_url,
-                    "projects_discovered": [p.get("name") for p in data.get("value", [])[:5]],
-                    "user": ado_email or "Authorized DevOps Engineer"
+                    "server": ado_url_str,
+                    "user": display_name,
+                    "account_id": auth_user.get("id"),
+                    "is_sandbox": False
                 }
-            return {"success": False, "error": f"Azure DevOps returned HTTP {resp.status_code}: {resp.text[:200]}"}
+            elif resp.status_code in [401, 203]:
+                return {
+                    "success": False,
+                    "error": f"Azure DevOps authentication failed (HTTP {resp.status_code}): Invalid Personal Access Token (PAT)."
+                }
+            elif resp.status_code == 404:
+                return {
+                    "success": False,
+                    "error": f"Azure DevOps organization not found at '{ado_url_str}' (HTTP 404)."
+                }
+            return {"success": False, "error": f"Azure DevOps returned HTTP {resp.status_code}: {resp.text[:150]}"}
+        except requests.exceptions.RequestException as e:
+            return {"success": False, "error": f"Network error connecting to Azure DevOps: {str(e)[:150]}"}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Connection failed: {str(e)[:150]}"}
 
     @staticmethod
     def execute(project_name: str = "Alpha-Core") -> Dict[str, Any]:

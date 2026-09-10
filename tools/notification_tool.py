@@ -44,14 +44,23 @@ class NotificationTool:
         if not hook_url:
             return {
                 "success": False,
-                "error": "Notification Webhook URL not configured. Please enter credentials or click 'Load Demo Credentials'."
+                "error": "Notification Webhook URL is required."
             }
-            
-        # Sandbox detection
-        if "demo" in str(hook_url).lower() or "hooks.slack.com/demo" in str(hook_url).lower():
+
+        hook_url_str = str(hook_url).strip()
+
+        # Check URL validity
+        if not hook_url_str.startswith("http"):
+            return {
+                "success": False,
+                "error": f"Invalid Webhook URL format '{hook_url}'. Must be a valid URL starting with https://."
+            }
+
+        # ONLY Official 1-Click Demo Sandbox Preset matches sandbox mode
+        if hook_url_str == "https://hooks.slack.com/demo/services/T00/B00/VPM_DEMO_SECRET":
             return {
                 "success": True,
-                "webhook": hook_url,
+                "webhook": hook_url_str,
                 "target_channel": channel_name or "#vpm-governance-alerts",
                 "platform": "Slack & Microsoft Teams Gateway (Sandboxed)",
                 "status": "Verified Webhook Handshake",
@@ -59,14 +68,25 @@ class NotificationTool:
             }
             
         try:
-            # Test payload ping
-            payload = {"text": "🔔 [VPM Health Check] Webhook connection test successful."}
-            resp = requests.post(hook_url, json=payload, timeout=8)
+            # Validate URL format
+            if not (hook_url_str.startswith("https://hooks.slack.com/") or ("webhook" in hook_url_str.lower() and hook_url_str.startswith("https://"))):
+                return {
+                    "success": False, 
+                    "error": "Invalid Webhook URL. Must be a valid HTTPS Slack, Microsoft Teams, or Webhook endpoint."
+                }
+
+            # Real test payload ping
+            payload = {"text": "🔔 [VPM Verification] Live webhook handshake connection test."}
+            resp = requests.post(hook_url_str, json=payload, timeout=8)
             if resp.status_code in [200, 204]:
-                return {"success": True, "webhook": hook_url, "status": "Message Dispatched"}
-            return {"success": False, "error": f"Webhook returned HTTP {resp.status_code}"}
+                return {"success": True, "webhook": hook_url_str, "user": channel_name or "Webhook Recipient", "status": "Message Dispatched", "is_sandbox": False}
+            elif resp.status_code in [400, 401, 403, 404]:
+                return {"success": False, "error": f"Webhook endpoint rejected test ping (HTTP {resp.status_code}). Invalid webhook URL."}
+            return {"success": False, "error": f"Webhook returned HTTP {resp.status_code}: {resp.text[:150]}"}
+        except requests.exceptions.RequestException as e:
+            return {"success": False, "error": f"Network error pinging webhook URL: {str(e)[:150]}"}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Webhook verification failed: {str(e)[:150]}"}
 
     @staticmethod
     def dispatch(title: str, severity: str, details: str = "") -> Dict[str, Any]:

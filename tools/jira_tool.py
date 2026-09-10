@@ -32,11 +32,17 @@ class JiraTool:
         env_email = getattr(Config, 'JIRA_EMAIL', None) or os.getenv('JIRA_EMAIL') or 'dipakkrsaha44@gmail.com'
         env_token = getattr(Config, 'JIRA_API_TOKEN', None) or os.getenv('JIRA_API_TOKEN') or 'ATATT3xFfGF0o2M-o3hxSh4XCKwBcrLO5EvrYYVjZ-DO60zGU6LuMpqMext-Uwy664taZSs1uS8ifdZaIHboUlaG1gKf5C_1rp6tUhYGt7S1G39ramjutsJwM9RrvvXG71mDV9nfXgRk8gcyPG3YBp1DMgYHOfaxkDJGQ0JQo63jr92dgdpGHIs=07F60D9C'
 
-        jira_url = (setting.base_url if setting and setting.base_url else None) or env_url
-        jira_email = (setting.username_email if setting and setting.username_email else None) or env_email
-        jira_token = (setting.api_token if setting and setting.api_token else None) or env_token
+        if setting and setting.base_url:
+            jira_url = setting.base_url
+            jira_email = setting.username_email or ''
+            # Use setting.api_token; only fallback to env_token if email matches env_email
+            jira_token = setting.api_token if setting.api_token else (env_token if jira_email == env_email else '')
+        else:
+            jira_url = env_url
+            jira_email = env_email
+            jira_token = env_token
 
-        return str(jira_url).strip(), str(jira_email).strip(), str(jira_token).strip()
+        return str(jira_url or '').strip(), str(jira_email or '').strip(), str(jira_token or '').strip()
 
     @staticmethod
     def get_schema() -> Dict[str, Any]:

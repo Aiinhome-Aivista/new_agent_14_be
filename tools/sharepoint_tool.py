@@ -43,14 +43,24 @@ class SharePointTool:
         if not (sp_url and (sp_secret or sp_tenant)):
             return {
                 "success": False,
-                "error": "SharePoint credentials not configured. Please enter credentials or click 'Load Demo Credentials'."
+                "error": "SharePoint Site URL and Client Secret / Graph API Key are required."
             }
-            
-        # Sandbox detection
-        if "demo" in str(sp_url).lower() or "demo" in str(sp_secret).lower():
+
+        sp_url_str = str(sp_url).strip().rstrip('/')
+        sp_secret_str = str(sp_secret or '').strip()
+
+        # Check URL validity
+        if not sp_url_str.startswith("http"):
+            return {
+                "success": False,
+                "error": f"Invalid SharePoint Site URL format '{sp_url}'. Must be a valid URL starting with https://."
+            }
+
+        # ONLY Official 1-Click Demo Sandbox Preset matches sandbox mode
+        if sp_url_str == "https://demo-pwc.sharepoint.com/sites/alpha-migration" and sp_secret_str == "DEMO_GRAPH_OAUTH_TOKEN_2026":
             return {
                 "success": True,
-                "server": sp_url,
+                "server": sp_url_str,
                 "site_name": "Alpha-Migration-PMO-Portal",
                 "document_libraries": ["Steering-Committee-MOMs", "Vendor-SOWs-and-Invoices", "Architecture-Blueprints"],
                 "user": "Microsoft Graph App Service Principal (Sandboxed)",
@@ -59,12 +69,18 @@ class SharePointTool:
             
         try:
             # Live Microsoft Graph API ping
-            resp = requests.get(f"https://graph.microsoft.com/v1.0/sites/root", headers={"Authorization": f"Bearer {sp_secret}"}, timeout=10)
-            if resp.status_code == 200:
-                return {"success": True, "server": sp_url, "user": sp_tenant or "SharePoint Authorized"}
-            return {"success": False, "error": f"SharePoint/Graph API returned HTTP {resp.status_code}: {resp.text[:200]}"}
+            resp = requests.get(f"https://graph.microsoft.com/v1.0/sites/root", headers={"Authorization": f"Bearer {sp_secret_str}"}, timeout=8)
+            if resp.status_code in [200, 201]:
+                return {"success": True, "server": sp_url_str, "user": sp_tenant or "SharePoint Authorized User", "is_sandbox": False}
+            elif resp.status_code in [401, 403]:
+                return {"success": False, "error": f"SharePoint authentication failed (HTTP {resp.status_code}): Invalid Client Secret or Access Token."}
+            elif resp.status_code == 404:
+                return {"success": False, "error": f"SharePoint site not found at '{sp_url_str}' (HTTP 404)."}
+            return {"success": False, "error": f"SharePoint/Graph API returned HTTP {resp.status_code}: {resp.text[:150]}"}
+        except requests.exceptions.RequestException as e:
+            return {"success": False, "error": f"Network error connecting to SharePoint / Microsoft 365: {str(e)[:150]}"}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Connection failed: {str(e)[:150]}"}
 
     @staticmethod
     def execute() -> Dict[str, Any]:

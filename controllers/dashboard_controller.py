@@ -47,6 +47,20 @@ def get_snapshot():
                     "unit": "Story Points / Sprint Avg",
                     "trend": "+12% Points from last sprint"
                 }
+            if "milestones" in snap_data and isinstance(snap_data["milestones"], list):
+                enriched_milestones = []
+                default_amounts = [350000, 450000, 300000, 400000]
+                for idx, m in enumerate(snap_data["milestones"]):
+                    if isinstance(m, dict):
+                        m_copy = dict(m)
+                        if "id" not in m_copy:
+                            m_copy["id"] = f"M-0{idx + 1}"
+                        if "timeline" not in m_copy:
+                            m_copy["timeline"] = m_copy.get("date", "Scheduled")
+                        if "trancheAmount" not in m_copy:
+                            m_copy["trancheAmount"] = default_amounts[idx % len(default_amounts)]
+                        enriched_milestones.append(m_copy)
+                snap_data["milestones"] = enriched_milestones
             snap_data["projects"] = project_list
             snap_dict['data'] = snap_data
         return jsonify(snap_dict)

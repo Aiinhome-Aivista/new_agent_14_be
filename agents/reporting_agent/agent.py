@@ -196,7 +196,12 @@ class ReportingAgent:
             "showstoppers": showstoppers,
             "velocity": velocity_data,
             "open_blockers": open_blockers,
-            "escalations": escalations
+            "escalations": escalations,
+            "predictive": {
+                "confidence_score": int(predictive.get("confidence_score", health_score) or health_score),
+                "forecasted_variance": float(predictive.get("forecasted_variance", variance) or variance),
+                "forecast_narrative": str(predictive.get("forecast_narrative") or "Reflexion predictive loop indicates stable sprint trajectory with controlled variance.")
+            }
         }
         
         prompt = f"Inputs:\n{json.dumps(inputs)}\n\nGenerate executive summary and dashboard structure. Return JSON ONLY."

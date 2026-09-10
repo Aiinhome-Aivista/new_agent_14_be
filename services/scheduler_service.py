@@ -98,27 +98,65 @@ class SchedulerService:
             import db
             from models.dashboard_snapshot import DashboardSnapshot
 
+            from models.integration_setting import IntegrationSetting
+
+            # Fetch settings to check if they are explicitly connected via UI
+            settings_map = {}
+            if db.db_session:
+                all_settings = db.db_session.query(IntegrationSetting).all()
+                for s in all_settings:
+                    settings_map[s.provider] = s
+
             # 1. Jira Connector Check
             try:
-                results["jira"] = JiraTool.test_connection()
+                jira_setting = settings_map.get("jira")
+                if jira_setting and jira_setting.is_connected:
+                    results["jira"] = JiraTool.test_connection()
+                    if results["jira"].get("success"):
+                        # Also sync projects and programs to db
+                        sync_res = JiraTool.sync_projects_to_db()
+                        logger.info(f"Jira Project Sync Result: {sync_res}")
+                else:
+                    results["jira"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
                 results["jira"] = {"success": False, "error": str(e)}
 
             # 2. Azure DevOps Connector Check
             try:
-                results["azure_devops"] = AzureDevOpsTool.test_connection()
+                ado_setting = settings_map.get("azure_devops")
+                if ado_setting and ado_setting.is_connected:
+                    results["azure_devops"] = AzureDevOpsTool.test_connection()
+                    if results["azure_devops"].get("success"):
+                        sync_res = AzureDevOpsTool.sync_projects_to_db()
+                        logger.info(f"Azure DevOps Project Sync Result: {sync_res}")
+                else:
+                    results["azure_devops"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
                 results["azure_devops"] = {"success": False, "error": str(e)}
 
             # 3. SAP ERP Connector Check
             try:
-                results["sap_erp"] = SapErpTool.test_connection()
+                sap_setting = settings_map.get("sap_erp")
+                if sap_setting and sap_setting.is_connected:
+                    results["sap_erp"] = SapErpTool.test_connection()
+                    if results["sap_erp"].get("success"):
+                        sync_res = SapErpTool.sync_projects_to_db()
+                        logger.info(f"SAP ERP Cost Center Sync Result: {sync_res}")
+                else:
+                    results["sap_erp"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
                 results["sap_erp"] = {"success": False, "error": str(e)}
 
             # 4. SharePoint Connector Check
             try:
-                results["sharepoint"] = SharepointTool.test_connection()
+                sp_setting = settings_map.get("sharepoint")
+                if sp_setting and sp_setting.is_connected:
+                    results["sharepoint"] = SharepointTool.test_connection()
+                    if results["sharepoint"].get("success"):
+                        sync_res = SharepointTool.sync_projects_to_db()
+                        logger.info(f"SharePoint Document Library Sync Result: {sync_res}")
+                else:
+                    results["sharepoint"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
                 results["sharepoint"] = {"success": False, "error": str(e)}
 

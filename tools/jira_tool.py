@@ -341,3 +341,103 @@ class JiraTool:
                 "success": False,
                 "error": f"Failed to connect to Jira Cloud: {str(e)}"
             }
+
+    @staticmethod
+    def sync_projects_to_db() -> Dict[str, Any]:
+        """
+        Fetches all projects and their categories from Jira and upserts them into
+        the programs and projects database tables.
+        """
+        import requests
+        from requests.auth import HTTPBasicAuth
+        import db
+        from models.program import Program
+        from models.project import Project
+
+        jira_url, jira_email, jira_token = JiraTool.get_credentials()
+        
+        if not jira_url or not jira_email or not jira_token:
+            return {
+                "success": False,
+                "error": "Jira credentials not configured."
+            }
+
+        if not db.db_session:
+            return {
+                "success": False,
+                "error": "No database session available."
+            }
+
+        try:
+            base_url = jira_url.rstrip('/')
+            headers = {"Accept": "application/json"}
+            auth = HTTPBasicAuth(jira_email, jira_token)
+
+            search_url = f"{base_url}/rest/api/3/project/search?expand=projectCategory"
+            response = requests.get(search_url, headers=headers, auth=auth, timeout=10)
+
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch projects from Jira (HTTP {response.status_code}): {response.text[:200]}")
+                return {
+                    "success": False,
+                    "error": f"Jira API HTTP {response.status_code}"
+                }
+
+            projects_data = response.json().get("values", [])
+            synced_programs = 0
+            synced_projects = 0
+
+            for proj in projects_data:
+                proj_name = proj.get("name")
+                proj_key = proj.get("key")
+                
+                if not proj_name or not proj_key:
+                    continue
+
+                category = proj.get("projectCategory", {})
+                category_name = category.get("name", "Jira Uncategorized Program")
+
+                # Upsert Program
+                program = db.db_session.query(Program).filter_by(name=category_name).first()
+                if not program:
+                    program = Program(
+                        name=category_name,
+                        description=category.get("description", "Imported from Jira Project Categories")
+                    )
+                    db.db_session.add(program)
+                    db.db_session.flush() # To get program.id
+                    synced_programs += 1
+                
+                # Upsert Project
+                project = db.db_session.query(Project).filter_by(jira_key=proj_key).first()
+                if not project:
+                    project = Project(
+                        program_id=program.id,
+                        jira_key=proj_key,
+                        name=proj_name,
+                        status='Active'
+                    )
+                    db.db_session.add(project)
+                    synced_projects += 1
+                else:
+                    if project.name != proj_name or project.program_id != program.id:
+                        project.name = proj_name
+                        project.program_id = program.id
+                        synced_projects += 1
+
+            db.db_session.commit()
+            return {
+                "success": True,
+                "synced_programs": synced_programs,
+                "synced_projects": synced_projects,
+                "message": f"Successfully synced {synced_projects} projects and {synced_programs} programs from Jira."
+            }
+        except Exception as e:
+            logger.error(f"Error syncing Jira projects to DB: {e}")
+            if db.db_session:
+                db.db_session.rollback()
+            return {
+                "success": False,
+                "error": str(e)
+            }
+

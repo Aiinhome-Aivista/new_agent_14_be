@@ -178,6 +178,27 @@ def get_snapshot():
                 enriched_milestones.append(m_copy)
         snap_data["milestones"] = enriched_milestones
     snap_data["projects"] = project_list
+
+    # Dynamic Jira integration status
+    from models.integration_setting import IntegrationSetting
+    jira_setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
+    if jira_setting and jira_setting.is_connected:
+        raw_url = str(jira_setting.base_url or '')
+        host = raw_url.replace("https://", "").replace("http://", "").rstrip('/')
+        snap_data["jira_integration"] = {
+            "is_connected": True,
+            "host": host,
+            "server": raw_url,
+            "user": jira_setting.username_email or ''
+        }
+    else:
+        snap_data["jira_integration"] = {
+            "is_connected": False,
+            "host": None,
+            "server": None,
+            "user": None
+        }
+
     snap_dict['data'] = snap_data
     return jsonify(snap_dict)
 

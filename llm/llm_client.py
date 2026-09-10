@@ -40,11 +40,11 @@ class LLMClient:
         if format:
             payload["format"] = format
             
+        request_timeout = kwargs.pop('request_timeout', (15, 900))
+        
         # Add any other kwargs like temperature, max_tokens if supported by the backend
         if kwargs:
             payload.update(kwargs)
-
-        request_timeout = kwargs.pop('request_timeout', (10, 900))
 
         try:
             response = requests.post(self.api_url, json=payload, timeout=request_timeout)
@@ -79,7 +79,7 @@ class LLMClient:
             payload.update(kwargs)
 
         try:
-            response = requests.post(self.api_url, json=payload, stream=True, timeout=(10, 180))
+            response = requests.post(self.api_url, json=payload, stream=True, timeout=(15, 900))
             response.raise_for_status()
             for line in response.iter_lines():
                 if line:

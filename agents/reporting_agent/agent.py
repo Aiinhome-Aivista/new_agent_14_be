@@ -205,13 +205,19 @@ class ReportingAgent:
         }
         
         prompt = f"Inputs:\n{json.dumps(inputs)}\n\nGenerate executive summary and dashboard structure. Return JSON ONLY."
-        narrative = "Executive report generated based on latest intake, financial metrics, and risk assessment."
+        # High quality executive default narrative
+        narrative = (
+            f"Autonomous executive synthesis for Project PRJ-{100 + project_id}. "
+            f"Overall health score is rated at {health_score}% with {len(critical_items)} critical and {len(high_items)} high delivery risks. "
+            f"Financial trajectory reflects an actual spend of {fmt_m(actual)} against a planned budget of {fmt_m(planned)} "
+            f"({burn_pct}% consumed, variance: {fmt_m(abs(variance))} {'surplus' if variance >= 0 else 'deficit'})."
+        )
         
         try:
-            response = llm.generate(prompt, system=get_reporting_system_prompt(), format="json")
+            response = llm.generate(prompt, system=get_reporting_system_prompt(), format="json", tier="mid", request_timeout=(5, 20))
             parsed = json.loads(response)
-            if "narrative_summary" in parsed:
-                narrative = parsed["narrative_summary"]
+            if "narrative_summary" in parsed and parsed["narrative_summary"].strip():
+                narrative = parsed["narrative_summary"].strip()
             if isinstance(parsed.get("dashboard_data"), dict):
                 dash = dict(parsed["dashboard_data"])
                 if not dash.get("kpis"):
@@ -232,12 +238,158 @@ class ReportingAgent:
             
         reports_dir = os.path.join(os.getcwd(), 'reports')
         os.makedirs(reports_dir, exist_ok=True)
-        filename = f"report_{project_id}_{int(uuid.uuid4().hex[:6], 16)}.docx"
-        file_path = os.path.join(reports_dir, filename)
-        doc.save(file_path)
+        rep_id = int(uuid.uuid4().hex[:6], 16)
+        docx_filename = f"report_{project_id}_{rep_id}.docx"
+        docx_path = os.path.join(reports_dir, docx_filename)
+        doc.save(docx_path)
+        
+        # Generate 1-Click Executive PDF
+        pdf_filename = f"Executive_Report_PRJ_{project_id}_{rep_id}.pdf"
+        pdf_path = os.path.join(reports_dir, pdf_filename)
+        final_report_file = pdf_path
+
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from datetime import datetime
+
+            pdf_doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=letter,
+                rightMargin=36,
+                leftMargin=36,
+                topMargin=36,
+                bottomMargin=36
+            )
+            styles = getSampleStyleSheet()
+
+            header_style = ParagraphStyle(
+                'ExecTitle',
+                parent=styles['Heading1'],
+                fontSize=20,
+                leading=24,
+                textColor=colors.HexColor('#FF5A14'),
+                fontName='Helvetica-Bold'
+            )
+            sub_style = ParagraphStyle(
+                'ExecSub',
+                parent=styles['Normal'],
+                fontSize=10,
+                leading=14,
+                textColor=colors.HexColor('#6B7280')
+            )
+            h2_style = ParagraphStyle(
+                'ExecH2',
+                parent=styles['Heading2'],
+                fontSize=12,
+                leading=16,
+                textColor=colors.HexColor('#111827'),
+                fontName='Helvetica-Bold',
+                spaceBefore=10,
+                spaceAfter=6
+            )
+            body_style = ParagraphStyle(
+                'ExecBody',
+                parent=styles['Normal'],
+                fontSize=10,
+                leading=14,
+                textColor=colors.HexColor('#374151')
+            )
+            table_cell = ParagraphStyle(
+                'TableCell',
+                parent=styles['Normal'],
+                fontSize=9,
+                leading=12,
+                textColor=colors.HexColor('#1F2937')
+            )
+            table_cell_bold = ParagraphStyle(
+                'TableCellBold',
+                parent=styles['Normal'],
+                fontSize=9,
+                leading=12,
+                fontName='Helvetica-Bold',
+                textColor=colors.HexColor('#FFFFFF')
+            )
+
+            elements = []
+            elements.append(Paragraph("VPM Platform — Autonomous Executive Briefing", header_style))
+            elements.append(Paragraph(f"Project ID: PRJ-{100 + project_id} | Generated: {datetime.now().strftime('%b %d, %Y %H:%M')} | Autonomous Telemetry", sub_style))
+            elements.append(Spacer(1, 8))
+            elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#FF5A14'), spaceAfter=12))
+
+            # Executive Summary Section
+            elements.append(Paragraph("Executive Narrative & Health Assessment", h2_style))
+            elements.append(Paragraph(narrative, body_style))
+            elements.append(Spacer(1, 10))
+
+            # Key Financials Table
+            elements.append(Paragraph("Financial Performance & Burn Trajectory", h2_style))
+            fin_data = [
+                [Paragraph("Metric", table_cell_bold), Paragraph("Value", table_cell_bold), Paragraph("Trajectory Status", table_cell_bold)],
+                [Paragraph("Planned Budget", table_cell), Paragraph(fmt_m(planned), table_cell), Paragraph("Allocated Baseline", table_cell)],
+                [Paragraph("Actual Spend", table_cell), Paragraph(fmt_m(actual), table_cell), Paragraph(f"{burn_pct}% Budget Consumed", table_cell)],
+                [Paragraph("Budget Variance", table_cell), Paragraph(fmt_m(abs(variance)), table_cell), Paragraph("Surplus (Under Budget)" if variance >= 0 else "Over Planned Trajectory", table_cell)],
+                [Paragraph("Overall Program Health", table_cell), Paragraph(f"{health_score}%", table_cell), Paragraph("Healthy Trajectory" if health_score >= 80 else "Attention Required", table_cell)]
+            ]
+            fin_table = Table(fin_data, colWidths=[150, 150, 240])
+            fin_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF5A14')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#F9FAFB'), colors.white]),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E5E7EB')),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            elements.append(fin_table)
+            elements.append(Spacer(1, 10))
+
+            # Risk Highlights Table
+            elements.append(Paragraph("Active Risk Highlights & Status", h2_style))
+            risk_rows = [
+                [Paragraph("Risk ID", table_cell_bold), Paragraph("Title", table_cell_bold), Paragraph("Severity", table_cell_bold), Paragraph("Status", table_cell_bold)]
+            ]
+            displayed_risks = [r for r in risks_list if (r.get("severity") or "").capitalize() in ("Critical", "High")][:6]
+            if not displayed_risks:
+                displayed_risks = risks_list[:5]
+            for r in displayed_risks:
+                r_id = r.get("id") or r.get("risk_id") or "R-N/A"
+                r_title = r.get("title") or "Unnamed Risk"
+                r_sev = (r.get("severity") or "Medium").capitalize()
+                r_stat = (r.get("status") or "Open").capitalize()
+                risk_rows.append([
+                    Paragraph(str(r_id), table_cell),
+                    Paragraph(str(r_title)[:55], table_cell),
+                    Paragraph(r_sev, table_cell),
+                    Paragraph(r_stat, table_cell)
+                ])
+            if len(risk_rows) == 1:
+                risk_rows.append([Paragraph("N/A", table_cell), Paragraph("No active critical/high risks recorded.", table_cell), Paragraph("Low", table_cell), Paragraph("Stable", table_cell)])
+
+            risk_table = Table(risk_rows, colWidths=[80, 280, 90, 90])
+            risk_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F2937')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#F9FAFB'), colors.white]),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E5E7EB')),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            elements.append(risk_table)
+
+            pdf_doc.build(elements)
+            final_report_file = pdf_path
+        except Exception as pdf_err:
+            logger.warning(f"PDF generation failed, falling back to docx: {pdf_err}")
+            final_report_file = docx_path
         
         return {
             "dashboard_data": structured_dashboard,
             "narrative_summary": narrative,
-            "report_file_path": file_path
+            "report_file_path": final_report_file
         }

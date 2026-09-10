@@ -147,7 +147,9 @@ CREATE TABLE risk_register (
 	description TEXT NOT NULL, 
 	severity VARCHAR(50) NOT NULL, 
 	status VARCHAR(50) NOT NULL, 
+	owner VARCHAR(100) DEFAULT 'Unassigned',
 	mitigation_plan TEXT, 
+	jira_issue_key VARCHAR(50),
 	created_at DATETIME, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(project_id) REFERENCES projects (id)

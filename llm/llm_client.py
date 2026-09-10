@@ -44,8 +44,10 @@ class LLMClient:
         if kwargs:
             payload.update(kwargs)
 
+        request_timeout = kwargs.pop('request_timeout', (10, 900))
+
         try:
-            response = requests.post(self.api_url, json=payload, timeout=(10, 900))
+            response = requests.post(self.api_url, json=payload, timeout=request_timeout)
             response.raise_for_status()
             
             data = response.json()

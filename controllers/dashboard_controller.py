@@ -16,6 +16,7 @@ def get_snapshot():
         snap_data = snap_dict.get('data', {})
         if isinstance(snap_data, dict):
             from models.budget import Budget
+            from models.approval_queue import ApprovalQueue
             all_projs = db.db_session.query(Project).all()
             project_list = []
             for p in all_projs:
@@ -33,13 +34,116 @@ def get_snapshot():
                     "status": p.status,
                     "budget_summary": b_str
                 })
+
+            # Real-time computation of cross_project_status (Program Director)
+            total_p = len(all_projs)
+            at_risk_p = 0
+            for p in all_projs:
+                has_crit = db.db_session.query(RiskRegister).filter(
+                    RiskRegister.project_id == p.id,
+                    RiskRegister.status == "Open",
+                    RiskRegister.severity.in_(["Critical", "High"])
+                ).first() is not None
+                if has_crit:
+                    at_risk_p += 1
+            healthy_p = total_p - at_risk_p
+            cross_project_status_str = f"{healthy_p} Active / {at_risk_p} At Risk" if at_risk_p > 0 else f"{total_p} Active & Governed"
+
+            # Real-time computation of total budget burn & variance (Program Director & Investor)
+            all_budgets = db.db_session.query(Budget).all()
+            total_planned = sum([float(b.planned_spend) for b in all_budgets]) if all_budgets else 2350000.0
+            total_actual = sum([float(b.actual_spend) for b in all_budgets]) if all_budgets else 1820000.0
+            tot_variance = total_planned - total_actual
+            burn_pct = round((total_actual / total_planned * 100)) if total_planned > 0 else 77
+
+            def fmt_m_val(val):
+                return f"${val / 1000000:.2f}M" if abs(val) >= 1000000 else f"${val / 1000:.0f}K"
+
+            total_budget_burn_str = f"{fmt_m_val(total_actual)} / {fmt_m_val(total_planned)}"
+            sched_variance_str = f"{'+' if tot_variance >= 0 else '-'}{fmt_m_val(abs(tot_variance))} {'Surplus' if tot_variance >= 0 else 'Deficit'}"
+
+            # Real-time query of showstoppers (Open Critical & High risks for Program Director)
+            open_showstoppers = db.db_session.query(RiskRegister).filter(
+                RiskRegister.status == "Open",
+                RiskRegister.severity.in_(["Critical", "High"])
+            ).order_by(RiskRegister.id.asc()).all()
+            showstoppers_list = [
+                {"id": r.risk_id, "title": r.title, "impact": r.severity.upper()}
+                for r in open_showstoppers
+            ]
+
+            # Real-time query of escalations (Pending approval queue + Critical open risks for PMO)
+            pending_approvals = db.db_session.query(ApprovalQueue).filter_by(status="Pending").order_by(ApprovalQueue.created_at.desc()).all()
+            escalations_list = []
+            for item in pending_approvals:
+                escalations_list.append({
+                    "id": f"ESC-00{item.id}",
+                    "action": f"{item.action_type} Pending Approval",
+                    "time": "Just now"
+                })
+            for r in open_showstoppers:
+                if r.severity == "Critical":
+                    escalations_list.append({
+                        "id": r.risk_id,
+                        "action": f"{r.title} (Critical Delivery Threat)",
+                        "time": "Active"
+                    })
+
+            # Real-time risk distribution for heatmaps (PMO & Investor)
+            all_risks = db.db_session.query(RiskRegister).all()
+            crit_ids = [r.risk_id for r in all_risks if r.severity == "Critical" and r.status == "Open"]
+            high_ids = [r.risk_id for r in all_risks if r.severity == "High" and r.status == "Open"]
+            med_ids = [r.risk_id for r in all_risks if r.severity == "Medium" and r.status == "Open"]
+            low_ids = [r.risk_id for r in all_risks if r.severity == "Low" and r.status == "Open"]
+            risks_heatmap = [
+                {"label": "Critical", "color": "bg-primary", "items": crit_ids},
+                {"label": "High", "color": "bg-button", "items": high_ids},
+                {"label": "Medium", "color": "bg-hover", "items": med_ids},
+                {"label": "Low", "color": "bg-borderOrange", "items": low_ids}
+            ]
+
+            # Dynamic KPI calculation
+            health = max(45, 95 - (len(crit_ids) * 10 + len(high_ids) * 5))
+            snap_data["healthScore"] = health
+            snap_data["cross_project_status"] = cross_project_status_str
+            snap_data["schedule_variance"] = sched_variance_str
+            snap_data["total_budget_burn"] = total_budget_burn_str
+            snap_data["showstoppers"] = showstoppers_list
+            snap_data["escalations"] = escalations_list
+            snap_data["risks"] = risks_heatmap
+            snap_data["kpis"] = [
+                {
+                    "title": "Program Budget",
+                    "value": total_budget_burn_str,
+                    "trend": "up" if total_actual <= total_planned else "down",
+                    "trendLabel": f"{burn_pct}% Burned"
+                },
+                {
+                    "title": "Budget Variance",
+                    "value": sched_variance_str,
+                    "trend": "down" if tot_variance < 0 else "up",
+                    "trendLabel": "Under Budget" if tot_variance >= 0 else "Over Budget"
+                },
+                {
+                    "title": "Active Risks",
+                    "value": str(len(crit_ids) + len(high_ids) + len(med_ids)),
+                    "trend": "up" if len(crit_ids) > 0 else "neutral",
+                    "trendLabel": f"{len(crit_ids)} Critical / {len(high_ids)} High"
+                },
+                {
+                    "title": "Overall Health",
+                    "value": f"{health}%",
+                    "trend": "neutral",
+                    "trendLabel": "Attention Required" if health < 80 else "Stable Trajectory"
+                }
+            ]
+
             if not snap_data.get("predictive") or not isinstance(snap_data.get("predictive"), dict):
-                health = snap_data.get("healthScore", 84)
                 snap_data["predictive"] = {
                     "confidence_score": health,
-                    "forecasted_variance": "+$220K Projected Surplus",
-                    "forecast_narrative": "Reflexion predictive loop indicates stable sprint trajectory with controlled variance and 84% delivery confidence.",
-                    "trajectory_status": "On Track"
+                    "forecasted_variance": sched_variance_str,
+                    "forecast_narrative": f"Reflexion predictive loop indicates {cross_project_status_str.lower()} with {health}% delivery confidence.",
+                    "trajectory_status": "On Track" if health >= 80 else "Action Required"
                 }
             if not snap_data.get("velocity") or not isinstance(snap_data.get("velocity"), dict):
                 snap_data["velocity"] = {

@@ -95,11 +95,13 @@ def list_ingestion_history():
     from models.project import Project
     
     docs = []
+    has_project_filter = False
     try:
         if db.db_session:
             query = db.db_session.query(UploadedDocument)
             project_id_param = request.args.get('project_id')
             if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
+                has_project_filter = True
                 pid = None
                 if str(project_id_param).isdigit():
                     pid = int(project_id_param)
@@ -107,8 +109,10 @@ def list_ingestion_history():
                     p = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
                     if p:
                         pid = p.id
-                if pid:
+                if pid is not None:
                     query = query.filter_by(project_id=pid)
+                else:
+                    return jsonify([])
             
             db_docs = query.order_by(UploadedDocument.created_at.desc()).all()
             if db_docs:
@@ -116,29 +120,37 @@ def list_ingestion_history():
     except Exception as exc:
         print(f"Error querying uploaded_documents: {exc}")
 
-    # Fallback to filesystem if DB has no records yet
-    if not docs:
-        uploads_dir = os.path.join(os.getcwd(), 'uploads')
-        if os.path.exists(uploads_dir):
-            import time
-            for fname in sorted(os.listdir(uploads_dir), reverse=True):
-                fpath = os.path.join(uploads_dir, fname)
-                if os.path.isfile(fpath):
-                    stat = os.stat(fpath)
-                    size_kb = stat.st_size / 1024
-                    size_fmt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb / 1024):.2f} MB"
-                    ext = os.path.splitext(fname)[1].lstrip('.').upper() or 'TXT'
-                    time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))
-                    docs.append({
-                        "id": fname,
-                        "filename": fname,
-                        "file_type": ext,
-                        "size": size_fmt,
-                        "uploaded_at": time_str,
-                        "uploaded_by": "pm@example.com",
-                        "uploaded_by_role": "Project Manager",
-                        "risks_detected": 0,
-                        "status": "Indexed in Vector Memory",
-                        "indexed": True
-                    })
+    # Fallback to filesystem ONLY if:
+    # 1. No specific project was requested (has_project_filter is False)
+    # 2. AND the database has absolutely no records across all projects
+    if not docs and not has_project_filter:
+        try:
+            total_db_count = db.db_session.query(UploadedDocument).count() if db.db_session else 0
+        except Exception:
+            total_db_count = 0
+
+        if total_db_count == 0:
+            uploads_dir = os.path.join(os.getcwd(), 'uploads')
+            if os.path.exists(uploads_dir):
+                import time
+                for fname in sorted(os.listdir(uploads_dir), reverse=True):
+                    fpath = os.path.join(uploads_dir, fname)
+                    if os.path.isfile(fpath):
+                        stat = os.stat(fpath)
+                        size_kb = stat.st_size / 1024
+                        size_fmt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb / 1024):.2f} MB"
+                        ext = os.path.splitext(fname)[1].lstrip('.').upper() or 'TXT'
+                        time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))
+                        docs.append({
+                            "id": fname,
+                            "filename": fname,
+                            "file_type": ext,
+                            "size": size_fmt,
+                            "uploaded_at": time_str,
+                            "uploaded_by": "pm@example.com",
+                            "uploaded_by_role": "Project Manager",
+                            "risks_detected": 0,
+                            "status": "Indexed in Vector Memory",
+                            "indexed": True
+                        })
     return jsonify(docs)

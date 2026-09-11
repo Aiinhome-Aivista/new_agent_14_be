@@ -40,5 +40,10 @@ def login():
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"error": "Invalid credentials"}), 401
         
-    token = AuthService.generate_token(user.role, str(user.id), email=user.email)
-    return jsonify({"token": token, "role": user.role, "email": user.email})
+    token = AuthService.generate_token(user.role, str(user.id), email=user.email, name=user.name)
+    return jsonify({
+        "token": token, 
+        "role": user.role, 
+        "email": user.email, 
+        "name": user.name or user.email.split('@')[0]
+    })

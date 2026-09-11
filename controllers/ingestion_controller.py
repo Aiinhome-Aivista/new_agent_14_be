@@ -43,20 +43,23 @@ def upload_file():
         from datetime import datetime, timezone
 
         user_info = getattr(request, 'user', {}) or {}
-        uploaded_by = user_info.get('email') or user_info.get('sub')
+        uploader_name = user_info.get('name') or request.form.get('uploaded_by')
         
-        # If uploaded_by is numeric user_id, resolve actual email from database
-        if uploaded_by and '@' not in str(uploaded_by):
-            try:
-                u = db.db_session.query(User).filter_by(id=int(uploaded_by)).first()
-                if u and u.email:
-                    uploaded_by = u.email
-            except Exception:
-                pass
+        if not uploader_name:
+            email_or_sub = user_info.get('email') or user_info.get('sub')
+            if email_or_sub:
+                try:
+                    u = db.db_session.query(User).filter(
+                        (User.email == email_or_sub) | (User.id == (int(email_or_sub) if str(email_or_sub).isdigit() else -1))
+                    ).first()
+                    if u and u.name:
+                        uploader_name = u.name
+                    elif u and u.email:
+                        uploader_name = u.email
+                except Exception:
+                    pass
 
-        if not uploaded_by:
-            uploaded_by = request.form.get('uploaded_by') or 'pm@example.com'
-
+        uploaded_by = uploader_name or user_info.get('email') or 'Sanjib Sau'
         uploaded_by_role = user_info.get('role') or request.form.get('uploaded_by_role') or 'Project Manager'
         risks_detected = result.get('risks_detected', 0) if isinstance(result, dict) else 0
 

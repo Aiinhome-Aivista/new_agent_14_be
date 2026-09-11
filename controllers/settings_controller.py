@@ -222,3 +222,18 @@ def trigger_scheduler_sync():
     res = scheduler.trigger_sync_now()
     return jsonify({"success": True, "message": res.get("message")})
 
+@settings_bp.route('/sync-project/<int:project_id>', methods=['POST'])
+@require_roles('PMO', 'Program Director')
+def sync_project_connectors(project_id):
+    """
+    Triggers connector synchronization matching the given project.
+    Fetches issues/telemetry from Jira and matches to project_id in DB.
+    """
+    from tools.jira_tool import JiraTool
+    res = JiraTool.sync_project_telemetry(project_id)
+    if res.get("success"):
+        return jsonify(res), 200
+    else:
+        return jsonify(res), 400
+
+

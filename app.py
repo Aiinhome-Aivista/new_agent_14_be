@@ -12,6 +12,8 @@ from controllers.risks_controller import risks_bp
 from controllers.settings_controller import settings_bp
 from controllers.guardrails_controller import guardrails_bp
 from controllers.knowledge_controller import knowledge_bp
+from controllers.project_controller import project_bp
+from sqlalchemy import text
 
 def create_app():
     app = Flask(__name__)
@@ -21,8 +23,22 @@ def create_app():
     # Initialize Database
     init_db(app)
 
+    # Auto-migrate missing columns if necessary
+    try:
+        import db
+        with db.engine.connect() as conn:
+            # Check if description exists in projects table
+            check_sql = text("SHOW COLUMNS FROM projects LIKE 'description'")
+            res = conn.execute(check_sql).fetchone()
+            if not res:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN description TEXT NULL AFTER name"))
+                conn.commit()
+    except Exception as col_err:
+        pass
+
     # Register Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(project_bp, url_prefix='/api/projects')
     app.register_blueprint(ingestion_bp, url_prefix='/api/ingestion')
     app.register_blueprint(chat_bp, url_prefix='/api/chat')
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')

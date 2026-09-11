@@ -1,14 +1,26 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 import db
 from models.dashboard_snapshot import DashboardSnapshot
 from models.project import Project
 from models.risk_register import RiskRegister
+from models.budget import Budget
+from models.approval_queue import ApprovalQueue
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
 @dashboard_bp.route('/snapshot', methods=['GET'])
 def get_snapshot():
-    # Fetch the latest dashboard snapshot
+    # Read optional project_id query parameter
+    project_id_param = request.args.get('project_id')
+    active_project = None
+
+    if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
+        if str(project_id_param).isdigit():
+            active_project = db.db_session.query(Project).filter_by(id=int(project_id_param)).first()
+        if not active_project:
+            active_project = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+
+    # Fetch the latest dashboard snapshot baseline
     snapshot = db.db_session.query(DashboardSnapshot).order_by(DashboardSnapshot.created_at.desc()).first()
     
     if snapshot:
@@ -18,7 +30,7 @@ def get_snapshot():
             snap_data = {}
     else:
         snap_data = {
-            "name": "Alpha Migration Program",
+            "name": "Enterprise Governance Suite",
             "id": "PRJ-101",
             "healthScore": 95,
             "burndown": [],
@@ -27,8 +39,6 @@ def get_snapshot():
         }
         snap_dict = {"data": snap_data}
 
-    from models.budget import Budget
-    from models.approval_queue import ApprovalQueue
     all_projs = db.db_session.query(Project).all()
     project_list = []
     for p in all_projs:
@@ -47,23 +57,43 @@ def get_snapshot():
             "budget_summary": b_str
         })
 
-    # Real-time computation of cross_project_status (Program Director)
-    total_p = len(all_projs)
-    at_risk_p = 0
-    for p in all_projs:
-        has_crit = db.db_session.query(RiskRegister).filter(
-            RiskRegister.project_id == p.id,
+    # If scoping by project, override identity
+    if active_project:
+        snap_data["name"] = active_project.name
+        snap_data["id"] = active_project.jira_key
+        snap_data["numeric_id"] = active_project.id
+        snap_data["active_project"] = active_project.to_dict()
+        cross_project_status_str = f"{active_project.name} ({active_project.status})"
+        all_budgets = db.db_session.query(Budget).filter_by(project_id=active_project.id).all()
+        all_risks = db.db_session.query(RiskRegister).filter_by(project_id=active_project.id).all()
+        open_showstoppers = db.db_session.query(RiskRegister).filter(
+            RiskRegister.project_id == active_project.id,
             RiskRegister.status == "Open",
             RiskRegister.severity.in_(["Critical", "High"])
-        ).first() is not None
-        if has_crit:
-            at_risk_p += 1
-    healthy_p = total_p - at_risk_p
-    cross_project_status_str = f"{healthy_p} Active / {at_risk_p} At Risk" if at_risk_p > 0 else f"{total_p} Active & Governed"
+        ).order_by(RiskRegister.id.asc()).all()
+    else:
+        # Cross-project / Portfolio mode
+        total_p = len(all_projs)
+        at_risk_p = 0
+        for p in all_projs:
+            has_crit = db.db_session.query(RiskRegister).filter(
+                RiskRegister.project_id == p.id,
+                RiskRegister.status == "Open",
+                RiskRegister.severity.in_(["Critical", "High"])
+            ).first() is not None
+            if has_crit:
+                at_risk_p += 1
+        healthy_p = total_p - at_risk_p
+        cross_project_status_str = f"{healthy_p} Active / {at_risk_p} At Risk" if at_risk_p > 0 else f"{total_p} Active & Governed"
+        all_budgets = db.db_session.query(Budget).all()
+        all_risks = db.db_session.query(RiskRegister).all()
+        open_showstoppers = db.db_session.query(RiskRegister).filter(
+            RiskRegister.status == "Open",
+            RiskRegister.severity.in_(["Critical", "High"])
+        ).order_by(RiskRegister.id.asc()).all()
 
-    # Real-time computation of total budget burn & variance (Program Director & Investor)
-    all_budgets = db.db_session.query(Budget).all()
-    total_planned = sum([float(b.planned_spend) for b in all_budgets]) if all_budgets else 0.0
+    # Budget burn & variance calculations
+    total_planned = sum([float(b.planned_spend) for b in all_budgets]) if all_budgets else (1000000.0 if active_project else 0.0)
     total_actual = sum([float(b.actual_spend) for b in all_budgets]) if all_budgets else 0.0
     tot_variance = total_planned - total_actual
     burn_pct = round((total_actual / total_planned * 100)) if total_planned > 0 else 0
@@ -74,17 +104,13 @@ def get_snapshot():
     total_budget_burn_str = f"{fmt_m_val(total_actual)} / {fmt_m_val(total_planned)}"
     sched_variance_str = f"{'+' if tot_variance >= 0 else '-'}{fmt_m_val(abs(tot_variance))} {'Surplus' if tot_variance >= 0 else 'Deficit'}"
 
-    # Real-time query of showstoppers (Open Critical & High risks for Program Director)
-    open_showstoppers = db.db_session.query(RiskRegister).filter(
-        RiskRegister.status == "Open",
-        RiskRegister.severity.in_(["Critical", "High"])
-    ).order_by(RiskRegister.id.asc()).all()
+    # Real-time query of showstoppers (Open Critical & High risks)
     showstoppers_list = [
         {"id": r.risk_id, "title": r.title, "impact": r.severity.upper()}
         for r in open_showstoppers
     ]
 
-    # Real-time query of escalations (Pending approval queue + Critical open risks for PMO)
+    # Real-time query of escalations (Pending approval queue + Critical open risks)
     pending_approvals = db.db_session.query(ApprovalQueue).filter_by(status="Pending").order_by(ApprovalQueue.created_at.desc()).all()
     escalations_list = []
     for item in pending_approvals:
@@ -101,8 +127,26 @@ def get_snapshot():
                 "time": "Active"
             })
 
+    # Burndown: if active project, compute project-specific sprint curve
+    if active_project:
+        pl_k = max(10, int(total_planned / 1000))
+        ac_k = int(total_actual / 1000)
+        snap_data["burndown"] = [
+            {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": int(ac_k * 0.20)},
+            {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": int(ac_k * 0.40)},
+            {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": int(ac_k * 0.65)},
+            {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": int(ac_k * 0.85)},
+            {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": ac_k if ac_k > 0 else None},
+            {"sprint": "Sprint 6", "planned": pl_k, "actual": None}
+        ]
+        snap_data["financials"] = {
+            "totalBudget": total_planned,
+            "spent": total_actual,
+            "remaining": max(0, total_planned - total_actual),
+            "projectedVariance": tot_variance
+        }
+
     # Real-time risk distribution for heatmaps (PMO & Investor)
-    all_risks = db.db_session.query(RiskRegister).all()
     crit_ids = [r.risk_id for r in all_risks if r.severity == "Critical" and r.status == "Open"]
     high_ids = [r.risk_id for r in all_risks if r.severity == "High" and r.status == "Open"]
     med_ids = [r.risk_id for r in all_risks if r.severity == "Medium" and r.status == "Open"]

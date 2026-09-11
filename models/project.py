@@ -9,6 +9,7 @@ class Project(Base):
     program_id = Column(Integer, ForeignKey('programs.id'), nullable=False)
     jira_key = Column(String(50), nullable=False, unique=True)
     name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
     status = Column(String(50), default='Active')
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -18,6 +19,7 @@ class Project(Base):
             'program_id': self.program_id,
             'jira_key': self.jira_key,
             'name': self.name,
+            'description': self.description,
             'status': self.status,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

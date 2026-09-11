@@ -441,3 +441,65 @@ class JiraTool:
                 "error": str(e)
             }
 
+    @staticmethod
+    def sync_project_telemetry(project_id: int) -> Dict[str, Any]:
+        """
+        Synchronizes live connector data matching the specific active project.
+        Fetches issues from Jira matching project_key and maps them to the project in the DB.
+        """
+        import db
+        from models.project import Project
+        from models.risk_register import RiskRegister
+        import random
+
+        if not db.db_session:
+            return {"success": False, "error": "Database session not available"}
+
+        proj = db.db_session.query(Project).filter_by(id=project_id).first()
+        if not proj:
+            return {"success": False, "error": f"Project ID {project_id} not found"}
+
+        jira_key = proj.jira_key
+        fetch_res = JiraTool.execute(project_key=jira_key)
+
+        issues = fetch_res.get("issues", [])
+        synced_risks = 0
+
+        # Map critical/high issues into RiskRegister
+        for iss in issues:
+            priority = iss.get("priority", "Medium")
+            issue_id = iss.get("id")
+            if priority in ("Critical", "High") and issue_id:
+                existing_risk = db.db_session.query(RiskRegister).filter_by(
+                    project_id=proj.id,
+                    jira_issue_key=issue_id
+                ).first()
+
+                if not existing_risk:
+                    new_risk = RiskRegister(
+                        project_id=proj.id,
+                        risk_id=f"R-JIRA-{random.randint(100, 999)}",
+                        title=iss.get("summary", f"Jira Issue {issue_id}"),
+                        description=f"Auto-imported from Jira ticket {issue_id} under project {jira_key}",
+                        severity=priority,
+                        status="Open",
+                        owner="Jira Synced",
+                        mitigation_plan="Review Jira ticket in next sprint backlog refinement",
+                        jira_issue_key=issue_id
+                    )
+                    db.db_session.add(new_risk)
+                    synced_risks += 1
+
+        db.db_session.commit()
+
+        return {
+            "success": True,
+            "project_id": proj.id,
+            "project_name": proj.name,
+            "jira_key": jira_key,
+            "total_issues_fetched": len(issues),
+            "new_risks_synced": synced_risks,
+            "message": f"Successfully matched and synced {len(issues)} issues for project [{jira_key}]. {synced_risks} new risks recorded in project risk register."
+        }
+
+

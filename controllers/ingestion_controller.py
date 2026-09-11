@@ -92,11 +92,25 @@ def upload_file():
 def list_ingestion_history():
     import db
     from models.uploaded_document import UploadedDocument
+    from models.project import Project
     
     docs = []
     try:
         if db.db_session:
-            db_docs = db.db_session.query(UploadedDocument).order_by(UploadedDocument.created_at.desc()).all()
+            query = db.db_session.query(UploadedDocument)
+            project_id_param = request.args.get('project_id')
+            if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
+                pid = None
+                if str(project_id_param).isdigit():
+                    pid = int(project_id_param)
+                else:
+                    p = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+                    if p:
+                        pid = p.id
+                if pid:
+                    query = query.filter_by(project_id=pid)
+            
+            db_docs = query.order_by(UploadedDocument.created_at.desc()).all()
             if db_docs:
                 docs = [d.to_dict() for d in db_docs]
     except Exception as exc:

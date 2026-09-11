@@ -7,7 +7,22 @@ risks_bp = Blueprint('risks', __name__)
 @risks_bp.route('', methods=['GET'])
 @risks_bp.route('/', methods=['GET'])
 def get_risks():
-    risks = db.db_session.query(RiskRegister).order_by(RiskRegister.id.asc()).all()
+    project_id_param = request.args.get('project_id')
+    query = db.db_session.query(RiskRegister)
+
+    if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
+        from models.project import Project
+        pid = None
+        if str(project_id_param).isdigit():
+            pid = int(project_id_param)
+        else:
+            p = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+            if p:
+                pid = p.id
+        if pid:
+            query = query.filter_by(project_id=pid)
+
+    risks = query.order_by(RiskRegister.id.asc()).all()
     result = [r.to_dict() for r in risks]
     return jsonify(result)
 

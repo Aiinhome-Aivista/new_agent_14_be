@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class ChatService:
     @staticmethod
-    def stream_chat(query: str):
+    def stream_chat(query: str, project_id: str = None):
         """
         Server-Sent Events (SSE) generator streaming tokens directly via llm.stream_generate().
         Retrieves relevant RAG context from ChromaDB before streaming.
@@ -16,7 +16,7 @@ class ChatService:
         try:
             try:
                 retriever = RAGRetriever()
-                context_docs = retriever.retrieve(query)
+                context_docs = retriever.retrieve(query, project_id=project_id)
                 context = "\n".join([doc.get('content', '') for doc in context_docs if doc.get('content')])
             except Exception as rag_err:
                 logger.warning(f"RAG retrieval error in stream_chat: {rag_err}")

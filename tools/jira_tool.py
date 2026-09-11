@@ -11,11 +11,12 @@ class JiraTool:
     """
     
     @staticmethod
-    def get_credentials():
+    def get_credentials(project_id=None):
         """
         Resolves Jira credentials with priority:
-        1. DB IntegrationSetting (configured by user in Connectors UI)
-        2. Config / .env defaults
+        1. DB IntegrationSetting for specific project_id
+        2. DB IntegrationSetting for project_id = 1 (default project)
+        3. Config / .env defaults
         """
         import db
         from models.integration_setting import IntegrationSetting
@@ -24,7 +25,12 @@ class JiraTool:
         setting = None
         if db.db_session:
             try:
-                setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
+                if project_id:
+                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=project_id).first()
+                if not setting:
+                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=1).first()
+                if not setting:
+                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
             except Exception:
                 setting = None
 
@@ -70,14 +76,14 @@ class JiraTool:
         }
         
     @staticmethod
-    def test_connection() -> Dict[str, Any]:
+    def test_connection(project_id=None) -> Dict[str, Any]:
         """
         Tests connection to Jira Cloud using live Atlassian REST API (/rest/api/3/myself).
         """
         import requests
         from requests.auth import HTTPBasicAuth
         
-        jira_url, jira_email, jira_token = JiraTool.get_credentials()
+        jira_url, jira_email, jira_token = JiraTool.get_credentials(project_id=project_id)
         
         if not jira_url or not jira_email or not jira_token:
             return {
@@ -116,14 +122,14 @@ class JiraTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def execute(project_key: str, status: str = "all") -> Dict[str, Any]:
+    def execute(project_key: str, status: str = "all", project_id=None) -> Dict[str, Any]:
         """
         Executes real Jira Cloud issue fetch using Atlassian /rest/api/3/search/jql API.
         """
         import requests
         from requests.auth import HTTPBasicAuth
         
-        jira_url, jira_email, jira_token = JiraTool.get_credentials()
+        jira_url, jira_email, jira_token = JiraTool.get_credentials(project_id=project_id)
         
         if not jira_url or not jira_email or not jira_token:
             return {
@@ -460,7 +466,7 @@ class JiraTool:
             return {"success": False, "error": f"Project ID {project_id} not found"}
 
         jira_key = proj.jira_key
-        fetch_res = JiraTool.execute(project_key=jira_key)
+        fetch_res = JiraTool.execute(project_key=jira_key, project_id=project_id)
 
         issues = fetch_res.get("issues", [])
         synced_risks = 0

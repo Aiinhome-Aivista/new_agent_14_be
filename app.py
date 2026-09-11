@@ -33,6 +33,33 @@ def create_app():
             if not res:
                 conn.execute(text("ALTER TABLE projects ADD COLUMN description TEXT NULL AFTER name"))
                 conn.commit()
+
+            # Check if project_id exists in integration_settings table
+            check_int_sql = text("SHOW COLUMNS FROM integration_settings LIKE 'project_id'")
+            int_res = conn.execute(check_int_sql).fetchone()
+            if not int_res:
+                conn.execute(text("ALTER TABLE integration_settings ADD COLUMN project_id INT NULL AFTER id"))
+                conn.execute(text("UPDATE integration_settings SET project_id = 1 WHERE project_id IS NULL"))
+                conn.commit()
+
+            # Check if old single provider index needs to be upgraded to composite (project_id, provider)
+            idx_sql = text("SHOW INDEX FROM integration_settings WHERE Key_name = 'provider'")
+            idx_res = conn.execute(idx_sql).fetchone()
+            if idx_res:
+                try:
+                    conn.execute(text("ALTER TABLE integration_settings DROP INDEX provider"))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            uq_sql = text("SHOW INDEX FROM integration_settings WHERE Key_name = 'uq_project_provider'")
+            uq_res = conn.execute(uq_sql).fetchone()
+            if not uq_res:
+                try:
+                    conn.execute(text("ALTER TABLE integration_settings ADD UNIQUE KEY uq_project_provider (project_id, provider)"))
+                    conn.commit()
+                except Exception:
+                    pass
     except Exception as col_err:
         pass
 

@@ -4,6 +4,8 @@ from models.integration_setting import IntegrationSetting
 from services.auth_service import require_roles
 from tools.jira_tool import JiraTool
 from tools.azure_devops_tool import AzureDevOpsTool
+from tools.google_drive_tool import GoogleDriveTool
+from tools.onedrive_tool import OneDriveTool
 from tools.sap_erp_tool import SapErpTool
 from tools.sharepoint_tool import SharePointTool
 from tools.notification_tool import NotificationTool
@@ -22,6 +24,12 @@ DEMO_PRESETS = {
         "base_url": "https://dev.azure.com/demo-pwc-enterprise",
         "username_email": "devops.lead@pwc-vpm.com",
         "api_token": "DEMO_AZURE_DEVOPS_PAT_2026"
+    },
+    "onedrive": {
+        "provider": "onedrive",
+        "base_url": "https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive",
+        "username_email": "onedrive.pmo@pwc-enterprise.com",
+        "api_token": "DEMO_ONEDRIVE_ACCESS_TOKEN_2026"
     },
     "sap_erp": {
         "provider": "sap_erp",
@@ -46,25 +54,41 @@ DEMO_PRESETS = {
 TOOL_MAP = {
     "jira": JiraTool,
     "azure_devops": AzureDevOpsTool,
+    "google_drive": GoogleDriveTool,
+    "onedrive": OneDriveTool,
     "sap_erp": SapErpTool,
     "sharepoint": SharePointTool,
     "notifications": NotificationTool
 }
+
+def get_requested_project_id():
+    pid = request.args.get('project_id')
+    if not pid and request.is_json and request.json:
+        pid = request.json.get('project_id')
+    if pid is not None:
+        try:
+            return int(pid)
+        except (ValueError, TypeError):
+            pass
+    return 1
 
 @settings_bp.route('', methods=['GET'])
 @settings_bp.route('/', methods=['GET'])
 @settings_bp.route('/all', methods=['GET'])
 @require_roles('PMO', 'Program Director')
 def get_all_settings():
-    """Fetches configuration state of all 5 enterprise connectors."""
-    providers = ["jira", "azure_devops", "sap_erp", "sharepoint", "notifications"]
+    """Fetches configuration state of enterprise connectors scoped by project_id."""
+    project_id = get_requested_project_id()
+    providers = ["jira", "azure_devops", "google_drive", "onedrive", "sap_erp", "sharepoint", "notifications"]
     results = {}
     for prov in providers:
-        setting = db.db_session.query(IntegrationSetting).filter_by(provider=prov).first()
+        setting = db.db_session.query(IntegrationSetting).filter_by(provider=prov, project_id=project_id).first()
         if setting:
             results[prov] = setting.to_dict()
         else:
             results[prov] = {
+                "id": None,
+                "project_id": project_id,
                 "provider": prov,
                 "base_url": "",
                 "username_email": "",
@@ -74,6 +98,7 @@ def get_all_settings():
             }
     return jsonify({
         "success": True,
+        "project_id": project_id,
         "settings": list(results.values()),
         "data": results,
         **results
@@ -82,10 +107,13 @@ def get_all_settings():
 @settings_bp.route('/<provider>', methods=['GET'])
 @require_roles('PMO', 'Program Director')
 def get_provider_settings(provider):
-    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
+    project_id = get_requested_project_id()
+    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider, project_id=project_id).first()
     if setting:
         return jsonify(setting.to_dict())
     return jsonify({
+        "id": None,
+        "project_id": project_id,
         "provider": provider,
         "base_url": "",
         "username_email": "",
@@ -98,6 +126,7 @@ def get_provider_settings(provider):
 @require_roles('PMO', 'Program Director')
 def save_provider_settings(provider):
     data = request.json or {}
+    project_id = get_requested_project_id()
     base_url = data.get("base_url", "").strip()
     email = data.get("username_email", "").strip()
     token = data.get("api_token", "").strip()
@@ -105,9 +134,9 @@ def save_provider_settings(provider):
     if not base_url:
         return jsonify({"success": False, "error": f"Base URL / Endpoint is required for {provider}."}), 400
 
-    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
+    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider, project_id=project_id).first()
     if not setting:
-        setting = IntegrationSetting(provider=provider)
+        setting = IntegrationSetting(provider=provider, project_id=project_id)
         db.db_session.add(setting)
         
     setting.base_url = base_url
@@ -125,14 +154,24 @@ def save_provider_settings(provider):
         db.db_session.commit()
         return jsonify({"success": False, "error": f"Unknown connector provider: {provider}"}), 400
 
-    test_result = tool.test_connection()
+    import inspect
+    if hasattr(tool, 'test_connection'):
+        sig = inspect.signature(tool.test_connection)
+        if 'project_id' in sig.parameters:
+            test_result = tool.test_connection(project_id=project_id)
+        else:
+            test_result = tool.test_connection()
+    else:
+        test_result = {"success": True}
+
     if test_result.get("success"):
         setting.is_connected = True
         db.db_session.commit()
         return jsonify({
             "success": True, 
             "is_connected": True,
-            "message": f"Successfully verified and connected to {provider}! Authenticated as {test_result.get('user', 'Verified User')}",
+            "project_id": project_id,
+            "message": f"Successfully verified and connected to {provider} for Project #{project_id}! Authenticated as {test_result.get('user', 'Verified User')}",
             "data": setting.to_dict(),
             "test_result": test_result
         })
@@ -144,6 +183,7 @@ def save_provider_settings(provider):
         return jsonify({
             "success": False,
             "is_connected": False,
+            "project_id": project_id,
             "error": f"Connection verification failed: {err_msg}",
             "data": setting.to_dict(),
             "test_result": test_result
@@ -156,26 +196,49 @@ def test_provider_connection(provider):
     if not tool:
         return jsonify({"success": False, "error": f"Unknown connector provider: {provider}"}), 400
     
-    result = tool.test_connection()
-    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
-    if setting:
-        if result.get("success"):
-            setting.is_connected = True
+    project_id = get_requested_project_id()
+    data = request.json or {}
+
+    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider, project_id=project_id).first()
+    if not setting:
+        setting = IntegrationSetting(provider=provider, project_id=project_id)
+        db.db_session.add(setting)
+
+    # If new credentials were provided in test payload, update them for live verification
+    if "base_url" in data and data.get("base_url") is not None:
+        setting.base_url = str(data["base_url"]).strip()
+    if "api_token" in data and data.get("api_token") is not None:
+        setting.api_token = str(data["api_token"]).strip()
+    if "username_email" in data and data.get("username_email") is not None:
+        setting.username_email = str(data["username_email"]).strip()
+    db.db_session.flush()
+
+    import inspect
+    if hasattr(tool, 'test_connection'):
+        sig = inspect.signature(tool.test_connection)
+        if 'project_id' in sig.parameters:
+            result = tool.test_connection(project_id=project_id)
         else:
-            setting.is_connected = False
-        db.db_session.commit()
+            result = tool.test_connection()
+    else:
+        result = {"success": True}
+
+    setting.is_connected = bool(result.get("success"))
+    db.db_session.commit()
     return jsonify(result)
 
 @settings_bp.route('/<provider>/disconnect', methods=['POST'])
 @require_roles('PMO', 'Program Director')
 def disconnect_provider(provider):
-    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider).first()
+    project_id = get_requested_project_id()
+    setting = db.db_session.query(IntegrationSetting).filter_by(provider=provider, project_id=project_id).first()
     if setting:
         setting.is_connected = False
         db.db_session.commit()
     return jsonify({
         "success": True, 
-        "message": f"{provider} disconnected successfully.",
+        "project_id": project_id,
+        "message": f"{provider} disconnected successfully for Project #{project_id}.",
         "provider": provider,
         "is_connected": False
     })
@@ -183,17 +246,26 @@ def disconnect_provider(provider):
 @settings_bp.route('/demo-presets', methods=['POST'])
 @require_roles('PMO', 'Program Director')
 def load_demo_presets():
-    """1-Click load demo presets for all connectors into the database."""
+    """1-Click load demo presets for connectors into the database for the specified project."""
+    project_id = get_requested_project_id()
     target_provider = request.json.get("provider") if request.json else None
     
-    providers_to_seed = [target_provider] if target_provider and target_provider in DEMO_PRESETS else DEMO_PRESETS.keys()
+    if target_provider == 'google_drive':
+        return jsonify({
+            "success": False,
+            "error": "Google Drive requires a real OAuth 2.0 Access Token. Mock demo sandbox is disabled for Google Drive."
+        }), 400
+
+    providers_to_seed = [target_provider] if target_provider and target_provider in DEMO_PRESETS else [p for p in DEMO_PRESETS.keys() if p != 'google_drive']
     
     seeded = {}
     for prov in providers_to_seed:
+        if prov not in DEMO_PRESETS:
+            continue
         preset = DEMO_PRESETS[prov]
-        setting = db.db_session.query(IntegrationSetting).filter_by(provider=prov).first()
+        setting = db.db_session.query(IntegrationSetting).filter_by(provider=prov, project_id=project_id).first()
         if not setting:
-            setting = IntegrationSetting(provider=prov)
+            setting = IntegrationSetting(provider=prov, project_id=project_id)
             db.db_session.add(setting)
         setting.base_url = preset["base_url"]
         setting.username_email = preset["username_email"]
@@ -204,7 +276,8 @@ def load_demo_presets():
     db.db_session.commit()
     return jsonify({
         "success": True, 
-        "message": f"Demo sandbox credentials loaded and connected for {', '.join(providers_to_seed)}",
+        "project_id": project_id,
+        "message": f"Demo sandbox credentials loaded and connected for {', '.join(providers_to_seed)} on Project #{project_id}",
         "data": seeded
     })
 
@@ -235,5 +308,32 @@ def sync_project_connectors(project_id):
         return jsonify(res), 200
     else:
         return jsonify(res), 400
+
+@settings_bp.route('/sync-gdrive/<int:project_id>', methods=['POST'])
+@require_roles('PMO', 'Program Director')
+def sync_gdrive(project_id):
+    """
+    Synchronizes project documents from linked Google Drive folder into database.
+    """
+    from tools.google_drive_tool import GoogleDriveTool
+    res = GoogleDriveTool.sync_project_drive(project_id)
+    if res.get("success"):
+        return jsonify(res), 200
+    else:
+        return jsonify(res), 400
+
+@settings_bp.route('/sync-onedrive/<int:project_id>', methods=['POST'])
+@require_roles('PMO', 'Program Director')
+def sync_onedrive(project_id):
+    """
+    Synchronizes project documents from linked Microsoft OneDrive repository into database.
+    """
+    from tools.onedrive_tool import OneDriveTool
+    res = OneDriveTool.sync_project_onedrive(project_id)
+    if res.get("success"):
+        return jsonify(res), 200
+    else:
+        return jsonify(res), 400
+
 
 

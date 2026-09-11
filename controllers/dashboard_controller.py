@@ -225,7 +225,13 @@ def get_snapshot():
 
     # Dynamic Jira integration status
     from models.integration_setting import IntegrationSetting
-    jira_setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
+    jira_setting = None
+    if active_project:
+        jira_setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=active_project.id).first()
+    if not jira_setting:
+        jira_setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=1).first()
+    if not jira_setting:
+        jira_setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
     if jira_setting and jira_setting.is_connected:
         raw_url = str(jira_setting.base_url or '')
         host = raw_url.replace("https://", "").replace("http://", "").rstrip('/')

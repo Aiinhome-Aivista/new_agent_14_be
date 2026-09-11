@@ -132,10 +132,10 @@ def get_snapshot():
         pl_k = max(10, int(total_planned / 1000))
         ac_k = int(total_actual / 1000)
         snap_data["burndown"] = [
-            {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": int(ac_k * 0.20)},
-            {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": int(ac_k * 0.40)},
-            {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": int(ac_k * 0.65)},
-            {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": int(ac_k * 0.85)},
+            {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": int(ac_k * 0.20) if ac_k > 0 else 0},
+            {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": int(ac_k * 0.40) if ac_k > 0 else 0},
+            {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": int(ac_k * 0.65) if ac_k > 0 else 0},
+            {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": int(ac_k * 0.85) if ac_k > 0 else 0},
             {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": ac_k if ac_k > 0 else None},
             {"sprint": "Sprint 6", "planned": pl_k, "actual": None}
         ]
@@ -159,7 +159,7 @@ def get_snapshot():
     ]
 
     # Dynamic KPI calculation
-    health = max(45, 95 - (len(crit_ids) * 10 + len(high_ids) * 5))
+    health = max(40, 95 - (len(crit_ids) * 12 + len(high_ids) * 6))
     snap_data["healthScore"] = health
     snap_data["cross_project_status"] = cross_project_status_str
     snap_data["schedule_variance"] = sched_variance_str
@@ -194,33 +194,91 @@ def get_snapshot():
         }
     ]
 
-    if not snap_data.get("predictive") or not isinstance(snap_data.get("predictive"), dict):
+    # Dynamic Open Blockers per project (for PM Velocity Dashboard)
+    open_blockers_list = []
+    for r in all_risks:
+        if str(r.status).capitalize() == "Open":
+            sev = str(r.severity).capitalize()
+            status_tag = "Blocked" if sev in ("Critical", "High") else "At Risk"
+            open_blockers_list.append({
+                "id": r.risk_id,
+                "title": r.title,
+                "status": status_tag,
+                "severity": sev
+            })
+    snap_data["open_blockers"] = open_blockers_list
+
+    # Dynamic Predictive Trajectory per project
+    risk_adj = (len(crit_ids) * 120000) + (len(high_ids) * 40000)
+    forecasted_var_num = tot_variance - risk_adj
+
+    if active_project:
+        p_name = active_project.name
+        p_key = active_project.jira_key
+        if len(crit_ids) > 0:
+            narrative = (
+                f"For {p_name} [{p_key}], current burn rate indicates a baseline variance of {sched_variance_str}. "
+                f"Factoring in {len(crit_ids)} critical showstopper(s) and {len(high_ids)} high-priority risk(s), "
+                f"forecasted trajectory is adjusted to {'+$' if forecasted_var_num >= 0 else '-$'}{abs(forecasted_var_num):,.0f} USD."
+            )
+            traj_status = "Action Required" if health < 80 else "Elevated Risk Monitoring"
+        elif len(high_ids) > 0:
+            narrative = (
+                f"For {p_name} [{p_key}], budget trajectory is {sched_variance_str}. "
+                f"Velocity is steady, with {len(high_ids)} high-priority risk(s) actively governed by PMO."
+            )
+            traj_status = "Within Budget Guardrails"
+        else:
+            narrative = (
+                f"Reflexion predictive loop indicates stable trajectory for {p_name} [{p_key}] "
+                f"with healthy variance ({sched_variance_str}), zero blockers, and {health}% delivery confidence."
+            )
+            traj_status = "Within Budget Guardrails"
+
+        snap_data["predictive"] = {
+            "confidence_score": health,
+            "forecasted_variance": forecasted_var_num,
+            "forecast_narrative": narrative,
+            "trajectory_status": traj_status,
+            "ai_processing_status": "success"
+        }
+
+        # Dynamic Velocity per project
+        base_pts = 80 + (active_project.id * 5) % 15
+        calc_pts = max(45, base_pts - (len(crit_ids) * 9 + len(high_ids) * 3))
+        trend_val = f"+{abs(health - 75)}% from last sprint" if health >= 75 else f"-{abs(75 - health)}% from velocity baseline"
+        snap_data["velocity"] = {
+            "points": calc_pts,
+            "unit": "Story Points / Sprint Avg",
+            "trend": trend_val
+        }
+
+        # Dynamic Milestones per project
+        snap_proj_id = snap_data.get("project_id") or snap_data.get("numeric_id")
+        has_specific_milestones = (snap_proj_id == active_project.id and "milestones" in snap_data and len(snap_data.get("milestones", [])) > 0)
+        if not has_specific_milestones:
+            m_quarter = int(total_planned / 4)
+            snap_data["milestones"] = [
+                {"id": "M-01", "name": f"{active_project.name} - Architecture & Blueprint", "timeline": "Sprint 1-2", "status": "Released" if total_actual > 0 else "Authorized", "trancheAmount": m_quarter, "slaScore": 98, "deliverablesPercent": 100},
+                {"id": "M-02", "name": f"{active_project.name} - Core Implementation", "timeline": "Sprint 3-4", "status": "In Progress" if total_actual > 0 else "Authorized", "trancheAmount": m_quarter, "slaScore": 92 if len(crit_ids) == 0 else 74, "deliverablesPercent": 60},
+                {"id": "M-03", "name": f"{active_project.name} - Integration & Verification", "timeline": "Sprint 5", "status": "On Hold" if len(crit_ids) > 0 else "Authorized", "trancheAmount": m_quarter, "slaScore": 75 if len(crit_ids) > 0 else 90, "deliverablesPercent": 30},
+                {"id": "M-04", "name": f"{active_project.name} - Production Cutover & Handover", "timeline": "Sprint 6", "status": "Locked", "trancheAmount": m_quarter, "slaScore": None, "deliverablesPercent": 0}
+            ]
+    else:
+        # Cross-project mode
         snap_data["predictive"] = {
             "confidence_score": health,
             "forecasted_variance": sched_variance_str,
-            "forecast_narrative": f"Reflexion predictive loop indicates {cross_project_status_str.lower()} with {health}% delivery confidence.",
-            "trajectory_status": "On Track" if health >= 80 else "Action Required"
+            "forecast_narrative": f"Reflexion predictive loop indicates {cross_project_status_str.lower()} with {health}% delivery confidence across all supervised programs.",
+            "trajectory_status": "On Track" if health >= 80 else "Action Required",
+            "ai_processing_status": "success"
         }
-    if not snap_data.get("velocity") or not isinstance(snap_data.get("velocity"), dict):
         snap_data["velocity"] = {
             "points": 88,
             "unit": "Story Points / Sprint Avg",
             "trend": "+12% Points from last sprint"
         }
-    if "milestones" in snap_data and isinstance(snap_data["milestones"], list):
-        enriched_milestones = []
-        default_amounts = [350000, 450000, 300000, 400000]
-        for idx, m in enumerate(snap_data["milestones"]):
-            if isinstance(m, dict):
-                m_copy = dict(m)
-                if "id" not in m_copy:
-                    m_copy["id"] = f"M-0{idx + 1}"
-                if "timeline" not in m_copy:
-                    m_copy["timeline"] = m_copy.get("date", "Scheduled")
-                if "trancheAmount" not in m_copy:
-                    m_copy["trancheAmount"] = default_amounts[idx % len(default_amounts)]
-                enriched_milestones.append(m_copy)
-        snap_data["milestones"] = enriched_milestones
+
     snap_data["projects"] = project_list
 
     # Dynamic Jira integration status

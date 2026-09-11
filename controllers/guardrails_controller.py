@@ -82,22 +82,51 @@ def get_guardrails():
     policies = db.db_session.query(GuardrailPolicy).order_by(GuardrailPolicy.id.asc()).all()
     policy_data = [p.to_dict() for p in policies]
 
+    project_id_param = request.args.get('project_id')
+    active_project = None
+    if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
+        from models.project import Project
+        if str(project_id_param).isdigit():
+            active_project = db.db_session.query(Project).filter_by(id=int(project_id_param)).first()
+        if not active_project:
+            active_project = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+
     # Fetch real approval queue entries
-    queue_items = db.db_session.query(ApprovalQueue).order_by(ApprovalQueue.created_at.desc()).all()
-    queue_data = [item.to_dict() for item in queue_items]
+    all_queue_items = db.db_session.query(ApprovalQueue).order_by(ApprovalQueue.created_at.desc()).all()
+    queue_data = []
+    for item in all_queue_items:
+        i_dict = item.to_dict()
+        payload = i_dict.get('payload', {})
+        if isinstance(payload, str):
+            try:
+                import json
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        
+        if active_project:
+            p_id = payload.get('project_id') if isinstance(payload, dict) else None
+            # Check if this queue item matches active project
+            if p_id in (active_project.id, str(active_project.id), active_project.jira_key):
+                queue_data.append(i_dict)
+        else:
+            queue_data.append(i_dict)
     
     # Fetch recent run audit logs
-    run_logs = db.db_session.query(AgentRunLog).order_by(AgentRunLog.created_at.desc()).limit(10).all()
+    run_logs = db.db_session.query(AgentRunLog).order_by(AgentRunLog.created_at.desc()).limit(15).all()
     audit_data = [log.to_dict() for log in run_logs]
     
     return jsonify({
         "policies": policy_data,
         "approval_queue": queue_data,
         "audits": audit_data,
+        "project": active_project.to_dict() if active_project else None,
         "stats": {
-            "active_policies": len(policy_data),
+            "active_policies": len([p for p in policy_data if p.get("status") == "Active"]),
             "pending_approvals": len([q for q in queue_data if q.get("status") == "Pending"]),
-            "total_audits": len(audit_data)
+            "total_audits": len(audit_data),
+            "project_name": active_project.name if active_project else "Enterprise Portfolio",
+            "project_key": active_project.jira_key if active_project else "ALL"
         }
     })
 

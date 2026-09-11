@@ -11,20 +11,50 @@ def list_reports():
     if not os.path.exists(reports_dir):
         return jsonify([])
         
+    project_id_param = request.args.get('project_id')
+    active_project = None
+    if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
+        import db
+        from models.project import Project
+        if str(project_id_param).isdigit():
+            active_project = db.db_session.query(Project).filter_by(id=int(project_id_param)).first()
+        if not active_project:
+            active_project = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+
     reports = []
-    for file in os.listdir(reports_dir):
+    for file in sorted(os.listdir(reports_dir), reverse=True):
         if file.endswith('.docx') or file.endswith('.pdf'):
             import time
-            stat = os.stat(os.path.join(reports_dir, file))
-            date_str = time.strftime('%Y-%m-%d', time.localtime(stat.st_mtime))
+            fpath = os.path.join(reports_dir, file)
+            stat = os.stat(fpath)
+            date_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))
+            size_kb = stat.st_size / 1024
+            size_fmt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb / 1024):.2f} MB"
             
-            reports.append({
-                "id": file,
-                "name": file,
-                "date": date_str,
-                "type": "Executive" if ("Executive" in file or "report_" in file) else "Status",
-                "url": f"/api/reports/download/{file}"
-            })
+            match = True
+            if active_project:
+                pid = active_project.id
+                key = active_project.jira_key.lower()
+                file_lower = file.lower()
+                target_keys = [
+                    f"prj_{pid}_",
+                    f"report_{pid}_",
+                ]
+                if key != "prj":
+                    target_keys.extend([f"_{key}_", f"prj_{key}_"])
+                match = any(k in file_lower for k in target_keys)
+
+            if match:
+                reports.append({
+                    "id": file,
+                    "name": file,
+                    "date": date_str,
+                    "size": size_fmt,
+                    "type": "Executive Briefing" if ("Executive" in file or "report_" in file) else "Status Report",
+                    "project_id": active_project.id if active_project else None,
+                    "project_name": active_project.name if active_project else None,
+                    "url": f"/api/reports/download/{file}"
+                })
     return jsonify(reports)
 
 @reports_bp.route('/download/<filename>', methods=['GET'])
@@ -68,6 +98,7 @@ def generate_report():
             proj = db.db_session.query(Project).first()
             
         project_id = proj.id if proj else 1
+        project_name = proj.name if proj else f"Project {project_id}"
         
         # Fetch latest snapshot data
         snapshot = db.db_session.query(DashboardSnapshot).order_by(DashboardSnapshot.created_at.desc()).first()
@@ -88,9 +119,14 @@ def generate_report():
             budget_planned = 1500000.0
             budget_actual = 1200000.0
 
+        crit_count = sum(1 for r in risks if str(r.severity).capitalize() == 'Critical' and str(r.status).capitalize() == 'Open')
+        high_count = sum(1 for r in risks if str(r.severity).capitalize() == 'High' and str(r.status).capitalize() == 'Open')
+        health_score = max(40, 95 - (crit_count * 12 + high_count * 6))
+
         rep_agent = ReportingAgent()
         report_result = rep_agent.execute({
             "project_id": project_id,
+            "project_name": project_name,
             "kpis": snap_data.get("kpis", []),
             "financials": {
                 "budget_planned": budget_planned,
@@ -98,11 +134,11 @@ def generate_report():
             },
             "risks": [r.to_dict() for r in risks],
             "predictive": {
-                "confidence_score": snap_data.get("healthScore", 78)
+                "confidence_score": health_score
             }
         })
         
-        filename = os.path.basename(report_result.get("report_file_path", "Executive_Report.pdf"))
+        filename = os.path.basename(report_result.get("report_file_path", f"Executive_Report_PRJ_{project_id}.pdf"))
         return jsonify({
             "success": True,
             "filename": filename,

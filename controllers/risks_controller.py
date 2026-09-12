@@ -1,8 +1,65 @@
 from flask import Blueprint, jsonify, request
 import db
 from models.risk_register import RiskRegister
+from models.project import Project
 
 risks_bp = Blueprint('risks', __name__)
+
+def enrich_risk_dict(r, project_map=None):
+    d = r.to_dict()
+    pid = r.project_id
+    if project_map and pid in project_map:
+        proj = project_map[pid]
+        d['project_name'] = proj.name
+        d['project_key'] = proj.jira_key
+    else:
+        proj = db.db_session.query(Project).filter_by(id=pid).first()
+        if proj:
+            d['project_name'] = proj.name
+            d['project_key'] = proj.jira_key
+        else:
+            d['project_name'] = f"Project {pid}"
+            d['project_key'] = f"PRJ-{pid}"
+
+    # Determine functional category
+    title_lower = (r.title or '').lower() + ' ' + (r.description or '').lower()
+    if any(k in title_lower for k in ['security', 'iam', 'token', 'gdpr', 'privacy', 'pci', 'audit', 'compliance']):
+        d['category'] = 'Security & Compliance'
+    elif any(k in title_lower for k in ['vendor', 'sla', 'edi', 'contractor', 'partner', 'turnover', 'sow']):
+        d['category'] = 'Vendor & SLA'
+    elif any(k in title_lower for k in ['cloud', 'vpc', 'cross-region', 'kubernetes', 'ec2', 'infrastructure', 'network']):
+        d['category'] = 'Infrastructure & Cloud'
+    elif any(k in title_lower for k in ['spend', 'budget', 'ledger', 'reconciliation', 'financial', 'cost', 'overrun']):
+        d['category'] = 'Financial & Budget'
+    elif any(k in title_lower for k in ['schedule', 'milestone', 'training', 'adoption', 'cutover', 'delay']):
+        d['category'] = 'Delivery & Schedule'
+    else:
+        d['category'] = 'Architecture & Tech'
+
+    # Risk score & exposure
+    sev = str(r.severity).capitalize()
+    if sev == 'Critical':
+        d['risk_score'] = 9.2
+        d['probability'] = 'High'
+        d['financial_exposure'] = '$350K - $500K'
+        d['impact_label'] = 'Halts Release Gate'
+    elif sev == 'High':
+        d['risk_score'] = 7.5
+        d['probability'] = 'Medium'
+        d['financial_exposure'] = '$120K - $250K'
+        d['impact_label'] = 'Elevated PMO Attention'
+    elif sev == 'Medium':
+        d['risk_score'] = 5.0
+        d['probability'] = 'Medium'
+        d['financial_exposure'] = '$40K - $100K'
+        d['impact_label'] = 'Monitored by Lead'
+    else:
+        d['risk_score'] = 3.0
+        d['probability'] = 'Low'
+        d['financial_exposure'] = '< $40K'
+        d['impact_label'] = 'Controlled Baseline'
+
+    return d
 
 @risks_bp.route('', methods=['GET'])
 @risks_bp.route('/', methods=['GET'])
@@ -11,7 +68,6 @@ def get_risks():
     query = db.db_session.query(RiskRegister)
 
     if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
-        from models.project import Project
         pid = None
         if str(project_id_param).isdigit():
             pid = int(project_id_param)
@@ -23,7 +79,8 @@ def get_risks():
             query = query.filter_by(project_id=pid)
 
     risks = query.order_by(RiskRegister.id.asc()).all()
-    result = [r.to_dict() for r in risks]
+    all_projs = {p.id: p for p in db.db_session.query(Project).all()}
+    result = [enrich_risk_dict(r, all_projs) for r in risks]
     return jsonify(result)
 
 @risks_bp.route('/<int:risk_id>', methods=['PUT', 'PATCH'])
@@ -51,7 +108,7 @@ def update_risk(risk_id):
         return jsonify({
             "success": True, 
             "message": f"Risk {risk.risk_id} updated successfully", 
-            "risk": risk.to_dict()
+            "risk": enrich_risk_dict(risk)
         })
     except Exception as e:
         db.db_session.rollback()

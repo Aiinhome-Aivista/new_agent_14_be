@@ -255,6 +255,46 @@ def create_policy():
     return jsonify({"success": True, "policy": new_policy.to_dict()}), 201
 
 
+@guardrails_bp.route('/policies/<policy_id>', methods=['PUT', 'PATCH'])
+@require_roles('Program Director', 'PMO', 'Project Manager', 'Investor', 'Admin')
+def update_policy(policy_id):
+    """Updates an existing guardrail policy."""
+    pol = db.db_session.query(GuardrailPolicy).filter(
+        (GuardrailPolicy.policy_id == policy_id) | 
+        (GuardrailPolicy.id == policy_id)
+    ).first()
+    if not pol:
+        return jsonify({"error": "Policy not found"}), 404
+
+    data = request.json or {}
+    if 'name' in data and data['name'].strip():
+        pol.name = data['name'].strip()
+    if 'category' in data and data['category'].strip():
+        pol.category = data['category'].strip()
+    if 'description' in data:
+        pol.description = data['description'].strip()
+    if 'level' in data and data['level'].strip():
+        pol.level = data['level'].strip()
+    if 'status' in data and data['status'].strip():
+        pol.status = data['status'].strip()
+    if 'project_id' in data:
+        p_id = data.get('project_id')
+        if p_id is not None and str(p_id).strip().lower() not in ('', 'null', 'none', 'global'):
+            try:
+                pol.project_id = int(p_id)
+            except (ValueError, TypeError):
+                pass
+        else:
+            pol.project_id = None
+
+    try:
+        db.db_session.commit()
+        return jsonify({"success": True, "policy": pol.to_dict()})
+    except Exception as e:
+        db.db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
 @guardrails_bp.route('/policies/<policy_id>/toggle', methods=['PATCH', 'POST'])
 def toggle_policy(policy_id):
     pol = db.db_session.query(GuardrailPolicy).filter(

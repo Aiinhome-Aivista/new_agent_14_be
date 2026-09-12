@@ -102,18 +102,29 @@ def create_project():
     jira_key = (data.get('jira_key') or '').strip().upper()
     description = (data.get('description') or '').strip()
     status = (data.get('status') or 'Active').strip()
-    program_name = (data.get('program_name') or 'Alpha Migration').strip()
+    program_name = (data.get('program_name') or 'Enterprise Portfolio').strip()
     raw_budget = data.get('planned_spend', 1000000.0)
 
     if not name:
         return jsonify({'success': False, 'error': 'Project Name is required.'}), 400
-    if not jira_key:
-        return jsonify({'success': False, 'error': 'Project Key (Jira Key) is required.'}), 400
 
-    # Ensure Jira Key doesn't conflict
-    existing = db.db_session.query(Project).filter_by(jira_key=jira_key).first()
-    if existing:
-        return jsonify({'success': False, 'error': f"Project key '{jira_key}' already exists. Please choose a distinct key."}), 400
+    # Auto-generate unique project key if not explicitly supplied
+    if not jira_key:
+        words = [w for w in name.split() if w.isalnum()]
+        prefix = "".join(w[0].upper() for w in words[:4]) if words else "PRJ"
+        if len(prefix) < 2:
+            prefix = "PRJ"
+        candidate = prefix
+        counter = 101
+        while db.db_session.query(Project).filter_by(jira_key=candidate).first():
+            candidate = f"{prefix}-{counter}"
+            counter += 1
+        jira_key = candidate
+    else:
+        # Ensure provided Jira Key doesn't conflict
+        existing = db.db_session.query(Project).filter_by(jira_key=jira_key).first()
+        if existing:
+            return jsonify({'success': False, 'error': f"Project key '{jira_key}' already exists. Please choose a distinct key."}), 400
 
     try:
         try:
@@ -229,12 +240,54 @@ def update_project(project_id):
     if 'status' in data and data['status'].strip():
         project.status = data['status'].strip()
 
+    # Update or initialize budget planned_spend
+    updated_plan = None
+    if 'planned_spend' in data and data['planned_spend'] is not None:
+        try:
+            new_plan = float(data['planned_spend'])
+            updated_plan = new_plan
+            budget = db.db_session.query(Budget).filter_by(project_id=project.id).order_by(Budget.created_at.desc()).first()
+            if budget:
+                budget.planned_spend = new_plan
+                budget.variance = new_plan - float(budget.actual_spend or 0.0)
+            else:
+                budget = Budget(
+                    project_id=project.id,
+                    period="Q1 2026",
+                    planned_spend=new_plan,
+                    actual_spend=0.0,
+                    variance=new_plan,
+                    created_at=datetime.now(timezone.utc)
+                )
+                db.db_session.add(budget)
+        except (ValueError, TypeError):
+            pass
+
     try:
         db.db_session.commit()
+        
+        # Build enriched response
+        b = db.db_session.query(Budget).filter_by(project_id=project.id).order_by(Budget.created_at.desc()).first()
+        pl_val = float(b.planned_spend) if b else (updated_plan or 1000000.0)
+        ac_val = float(b.actual_spend) if b else 0.0
+        var_val = float(b.variance) if b else pl_val
+        burn_pct = round((ac_val / pl_val * 100)) if pl_val > 0 else 0
+        pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.0f}K"
+        ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.0f}K"
+
+        p_dict = project.to_dict()
+        p_dict.update({
+            'planned_spend': pl_val,
+            'actual_spend': ac_val,
+            'variance': var_val,
+            'burn_pct': burn_pct,
+            'budget_summary': f"{ac_str} / {pl_str}"
+        })
+
         return jsonify({
             'success': True,
-            'message': f"Project {project.name} updated successfully",
-            'project': project.to_dict()
+            'message': f"Project '{project.name}' updated successfully",
+            'project': p_dict
         })
     except Exception as e:
         db.db_session.rollback()

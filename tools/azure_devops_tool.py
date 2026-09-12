@@ -38,10 +38,10 @@ class AzureDevOpsTool:
             try:
                 if project_id:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops', project_id=project_id).first()
-                if not setting:
+                else:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops', project_id=1).first()
-                if not setting:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops').first()
+                    if not setting:
+                        setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops').first()
             except Exception:
                 setting = None
                 
@@ -135,10 +135,10 @@ class AzureDevOpsTool:
             try:
                 if project_id:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops', project_id=project_id).first()
-                if not setting:
+                else:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops', project_id=1).first()
-                if not setting:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops').first()
+                    if not setting:
+                        setting = db.db_session.query(IntegrationSetting).filter_by(provider='azure_devops').first()
             except Exception:
                 setting = None
                 

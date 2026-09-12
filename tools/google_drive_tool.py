@@ -110,10 +110,10 @@ class GoogleDriveTool:
             try:
                 if project_id:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='google_drive', project_id=project_id).first()
-                if not setting:
+                else:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='google_drive', project_id=1).first()
-                if not setting:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='google_drive').first()
+                    if not setting:
+                        setting = db.db_session.query(IntegrationSetting).filter_by(provider='google_drive').first()
             except Exception as e:
                 logger.error(f"Error querying IntegrationSetting for google_drive: {e}")
                 setting = None

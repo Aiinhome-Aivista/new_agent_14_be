@@ -60,6 +60,21 @@ def create_app():
                     conn.commit()
                 except Exception:
                     pass
+
+            # Check if project_id exists in guardrail_policies table
+            check_gp_sql = text("SHOW COLUMNS FROM guardrail_policies LIKE 'project_id'")
+            gp_res = conn.execute(check_gp_sql).fetchone()
+            if not gp_res:
+                try:
+                    conn.execute(text("ALTER TABLE guardrail_policies ADD COLUMN project_id INT NULL AFTER id"))
+                    conn.commit()
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE guardrail_policies ADD CONSTRAINT fk_guardrail_project FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE"))
+                    conn.commit()
+                except Exception:
+                    pass
     except Exception as col_err:
         pass
 

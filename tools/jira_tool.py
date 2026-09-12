@@ -27,26 +27,26 @@ class JiraTool:
             try:
                 if project_id:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=project_id).first()
-                if not setting:
+                else:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=1).first()
-                if not setting:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
+                    if not setting:
+                        setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
             except Exception:
                 setting = None
-
-        env_url = getattr(Config, 'JIRA_URL', None) or os.getenv('JIRA_URL') or os.getenv('JIRA_BASE_URL') or 'https://dipakkrsaha44.atlassian.net'
-        env_email = getattr(Config, 'JIRA_EMAIL', None) or os.getenv('JIRA_EMAIL') or 'dipakkrsaha44@gmail.com'
-        env_token = getattr(Config, 'JIRA_API_TOKEN', None) or os.getenv('JIRA_API_TOKEN') or 'ATATT3xFfGF0o2M-o3hxSh4XCKwBcrLO5EvrYYVjZ-DO60zGU6LuMpqMext-Uwy664taZSs1uS8ifdZaIHboUlaG1gKf5C_1rp6tUhYGt7S1G39ramjutsJwM9RrvvXG71mDV9nfXgRk8gcyPG3YBp1DMgYHOfaxkDJGQ0JQo63jr92dgdpGHIs=07F60D9C'
 
         if setting and setting.base_url:
             jira_url = setting.base_url
             jira_email = setting.username_email or ''
-            # Use setting.api_token; only fallback to env_token if email matches env_email
-            jira_token = setting.api_token if setting.api_token else (env_token if jira_email == env_email else '')
+            jira_token = setting.api_token or ''
+        elif not project_id:
+            # Only use environment defaults if no specific project was requested
+            jira_url = getattr(Config, 'JIRA_URL', None) or os.getenv('JIRA_URL') or os.getenv('JIRA_BASE_URL') or ''
+            jira_email = getattr(Config, 'JIRA_EMAIL', None) or os.getenv('JIRA_EMAIL') or ''
+            jira_token = getattr(Config, 'JIRA_API_TOKEN', None) or os.getenv('JIRA_API_TOKEN') or ''
         else:
-            jira_url = env_url
-            jira_email = env_email
-            jira_token = env_token
+            jira_url = ''
+            jira_email = ''
+            jira_token = ''
 
         return str(jira_url or '').strip(), str(jira_email or '').strip(), str(jira_token or '').strip()
 

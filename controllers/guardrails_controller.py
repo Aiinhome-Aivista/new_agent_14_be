@@ -61,6 +61,7 @@ def ensure_default_policies():
             for p in DEFAULT_POLICIES:
                 pol = GuardrailPolicy(
                     policy_id=p["policy_id"],
+                    project_id=None,
                     name=p["name"],
                     category=p["category"],
                     description=p["description"],
@@ -77,12 +78,9 @@ def ensure_default_policies():
 def get_guardrails():
     # Ensure default policies exist in DB
     ensure_default_policies()
-    
-    # Query persistent policies from DB
-    policies = db.db_session.query(GuardrailPolicy).order_by(GuardrailPolicy.id.asc()).all()
-    policy_data = [p.to_dict() for p in policies]
 
     project_id_param = request.args.get('project_id')
+    scope_param = (request.args.get('scope') or 'all').strip().lower()
     active_project = None
     if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
         from models.project import Project
@@ -90,6 +88,25 @@ def get_guardrails():
             active_project = db.db_session.query(Project).filter_by(id=int(project_id_param)).first()
         if not active_project:
             active_project = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+
+    # Query policies scoped to active project or global baseline
+    if active_project:
+        if scope_param == 'project_only':
+            query = db.db_session.query(GuardrailPolicy).filter(GuardrailPolicy.project_id == active_project.id)
+        elif scope_param == 'global_only':
+            query = db.db_session.query(GuardrailPolicy).filter(GuardrailPolicy.project_id.is_(None))
+        else:
+            query = db.db_session.query(GuardrailPolicy).filter(
+                (GuardrailPolicy.project_id.is_(None)) | (GuardrailPolicy.project_id == active_project.id)
+            )
+    else:
+        if scope_param == 'global_only':
+            query = db.db_session.query(GuardrailPolicy).filter(GuardrailPolicy.project_id.is_(None))
+        else:
+            query = db.db_session.query(GuardrailPolicy)
+
+    policies = query.order_by(GuardrailPolicy.id.asc()).all()
+    policy_data = [p.to_dict() for p in policies]
 
     # Fetch real approval queue entries
     all_queue_items = db.db_session.query(ApprovalQueue).order_by(ApprovalQueue.created_at.desc()).all()
@@ -123,12 +140,15 @@ def get_guardrails():
         "project": active_project.to_dict() if active_project else None,
         "stats": {
             "active_policies": len([p for p in policy_data if p.get("status") == "Active"]),
+            "project_policies_count": len([p for p in policy_data if not p.get("is_global")]),
+            "global_policies_count": len([p for p in policy_data if p.get("is_global")]),
             "pending_approvals": len([q for q in queue_data if q.get("status") == "Pending"]),
             "total_audits": len(audit_data),
             "project_name": active_project.name if active_project else "Enterprise Portfolio",
             "project_key": active_project.jira_key if active_project else "ALL"
         }
     })
+
 
 @guardrails_bp.route('/queue/<int:item_id>/resolve', methods=['POST'])
 @require_roles('Program Director', 'PMO')
@@ -197,6 +217,15 @@ def create_policy():
         return jsonify({"error": "Policy name required"}), 400
         
     ensure_default_policies()
+
+    project_id = data.get('project_id')
+    if project_id is not None and str(project_id).strip().lower() not in ('', 'null', 'none', 'global'):
+        try:
+            project_id = int(project_id)
+        except (ValueError, TypeError):
+            project_id = None
+    else:
+        project_id = None
     
     # Safely determine next POL-xxx ID avoiding collision
     all_p = db.db_session.query(GuardrailPolicy.policy_id).all()
@@ -213,6 +242,7 @@ def create_policy():
     
     new_policy = GuardrailPolicy(
         policy_id=policy_id,
+        project_id=project_id,
         name=name.strip(),
         category=data.get("category", "Custom Policy").strip(),
         description=data.get("description", "User-defined autonomous safety constraint").strip(),
@@ -223,6 +253,7 @@ def create_policy():
     db.db_session.commit()
     
     return jsonify({"success": True, "policy": new_policy.to_dict()}), 201
+
 
 @guardrails_bp.route('/policies/<policy_id>/toggle', methods=['PATCH', 'POST'])
 def toggle_policy(policy_id):

@@ -155,8 +155,23 @@ CREATE TABLE risk_register (
 	FOREIGN KEY(project_id) REFERENCES projects (id)
 );
 
+CREATE TABLE integration_settings (
+	id INTEGER NOT NULL AUTO_INCREMENT, 
+	project_id INTEGER NULL, 
+	provider VARCHAR(50) NOT NULL, 
+	base_url VARCHAR(500), 
+	username_email VARCHAR(255), 
+	api_token TEXT, 
+	is_connected BOOLEAN DEFAULT FALSE NOT NULL, 
+	updated_at DATETIME, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(project_id) REFERENCES projects (id),
+	UNIQUE KEY uq_project_provider (project_id, provider)
+);
+
 CREATE TABLE guardrail_policies (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
+	project_id INTEGER NULL,
 	policy_id VARCHAR(50) NOT NULL, 
 	name VARCHAR(255) NOT NULL, 
 	category VARCHAR(100) NOT NULL, 
@@ -165,20 +180,10 @@ CREATE TABLE guardrail_policies (
 	level VARCHAR(50) DEFAULT 'Medium', 
 	created_at DATETIME, 
 	PRIMARY KEY (id), 
+	FOREIGN KEY(project_id) REFERENCES projects (id) ON DELETE CASCADE,
 	UNIQUE (policy_id)
 );
 
-CREATE TABLE integration_settings (
-	id INTEGER NOT NULL AUTO_INCREMENT, 
-	provider VARCHAR(50) NOT NULL, 
-	base_url VARCHAR(255), 
-	username_email VARCHAR(255), 
-	api_token VARCHAR(255), 
-	is_connected BOOLEAN DEFAULT FALSE,
-	updated_at DATETIME, 
-	PRIMARY KEY (id), 
-	UNIQUE (provider)
-);
 
 CREATE TABLE uploaded_documents (
 	id INTEGER NOT NULL AUTO_INCREMENT,
@@ -256,6 +261,15 @@ ON DUPLICATE KEY UPDATE id=id;
 INSERT INTO dashboard_snapshots (id, program_id, data, created_at) VALUES
 (1, 1, '{"name": "Alpha Migration Program", "id": "PRJ-101", "kpis": [{"title": "Program Budget", "value": "$1.2M / $1.5M", "trend": "up", "trendLabel": "80% Burned"}, {"title": "Budget Variance", "value": "$300K Surplus", "trend": "down", "trendLabel": "Under Budget"}, {"title": "Active Risks", "value": "4", "trend": "up", "trendLabel": "2 Critical"}, {"title": "Overall Health", "value": "75%", "trend": "neutral", "trendLabel": "Moderate Risk"}], "burndown": [{"sprint": "Sprint 1", "planned": 100, "actual": 95}, {"sprint": "Sprint 2", "planned": 80, "actual": 82}, {"sprint": "Sprint 3", "planned": 60, "actual": 65}, {"sprint": "Sprint 4", "planned": 40, "actual": 40}, {"sprint": "Sprint 5", "planned": 20, "actual": 18}, {"sprint": "Sprint 6", "planned": 0, "actual": null}], "risks": [{"label": "Critical", "color": "bg-primary", "items": ["R-102", "R-145"]}, {"label": "High", "color": "bg-button", "items": ["R-099"]}, {"label": "Medium", "color": "bg-hover", "items": ["R-042"]}, {"label": "Low", "color": "bg-borderOrange", "items": ["R-011"]}], "financials": {"totalBudget": 1500000, "spent": 1200000, "remaining": 300000, "projectedVariance": -50000}, "milestones": [{"name": "Architecture Sign-off", "date": "Jan 15", "status": "completed"}, {"name": "MVP Delivery", "date": "Feb 28", "status": "completed"}, {"name": "Beta Rollout", "date": "Mar 30", "status": "in-progress"}, {"name": "Full Migration", "date": "Apr 30", "status": "pending"}]}', NOW())
 ON DUPLICATE KEY UPDATE id=id;
+
+-- 8. Project-Wise Enterprise Connectors & Integration Settings
+INSERT INTO integration_settings (id, project_id, provider, base_url, username_email, is_connected, updated_at) VALUES
+(1, 1, 'jira', 'https://dipakkrsaha44.atlassian.net', 'dipakkrsaha44@gmail.com', TRUE, NOW()),
+(2, 1, 'azure_devops', 'https://dev.azure.com/demo-pwc-enterprise', 'devops.lead@pwc-vpm.com', FALSE, NOW()),
+(3, 1, 'google_drive', 'https://drive.google.com/drive/folders/1QfjJBXAhVcoLbp-oxf9dEWVAo80LbGb9?usp=drive_link', 'id-vpm-drive@gen-lang-client-0101858653.iam.gserviceaccount.com', TRUE, NOW()),
+(4, 1, 'onedrive', 'https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive', 'onedrive.pmo@pwc-enterprise.com', FALSE, NOW())
+ON DUPLICATE KEY UPDATE project_id=VALUES(project_id), provider=VALUES(provider);
+
 
 
 

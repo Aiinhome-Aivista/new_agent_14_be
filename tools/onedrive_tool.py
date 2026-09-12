@@ -21,16 +21,25 @@ class OneDriveTool:
             try:
                 if project_id:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='onedrive', project_id=project_id).first()
-                if not setting:
+                else:
                     setting = db.db_session.query(IntegrationSetting).filter_by(provider='onedrive', project_id=1).first()
-                if not setting:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='onedrive').first()
+                    if not setting:
+                        setting = db.db_session.query(IntegrationSetting).filter_by(provider='onedrive').first()
             except Exception:
                 setting = None
 
-        drive_url = setting.base_url if setting and setting.base_url else "https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive"
-        account_email = setting.username_email if setting and setting.username_email else "onedrive.pmo@pwc-enterprise.com"
-        api_token = setting.api_token if setting and setting.api_token else "DEMO_ONEDRIVE_ACCESS_TOKEN_2026"
+        if setting and setting.base_url:
+            drive_url = setting.base_url
+            account_email = setting.username_email or ""
+            api_token = setting.api_token or ""
+        elif not project_id:
+            drive_url = "https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive"
+            account_email = "onedrive.pmo@pwc-enterprise.com"
+            api_token = "DEMO_ONEDRIVE_ACCESS_TOKEN_2026"
+        else:
+            drive_url = ""
+            account_email = ""
+            api_token = ""
 
         return str(drive_url).strip(), str(account_email).strip(), str(api_token).strip()
 

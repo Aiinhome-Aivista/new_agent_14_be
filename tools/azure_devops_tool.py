@@ -64,17 +64,6 @@ class AzureDevOpsTool:
                 "success": False,
                 "error": f"Invalid Azure DevOps URL format '{ado_url}'. Must be a valid URL like 'https://dev.azure.com/your-org'."
             }
-
-        # ONLY Official 1-Click Demo Sandbox Preset matches sandbox mode
-        if ado_url_str == "https://dev.azure.com/demo-pwc-enterprise" and ado_pat_str == "DEMO_AZURE_DEVOPS_PAT_2026":
-            return {
-                "success": True,
-                "server": ado_url_str,
-                "organization": "demo-pwc-enterprise",
-                "user": "PwC DevOps Lead (Sandboxed)",
-                "projects_discovered": ["Alpha-Core-Modernization", "Payment-Gateway-Services"],
-                "is_sandbox": True
-            }
             
         try:
             # Live Azure DevOps REST API connection verification
@@ -145,46 +134,17 @@ class AzureDevOpsTool:
         ado_url = setting.base_url if setting and setting.base_url else None
         ado_pat = setting.api_token if setting and setting.api_token else None
 
-        if not (ado_url and ado_pat):
+        is_conn = setting.is_connected if setting else False
+        if not (ado_url and ado_pat and is_conn):
             return {
-                "success": True,
-                "provider": "azure_devops",
-                "project": project_name,
-                "work_items": [
-                    {"id": "ADO-1042", "title": "PCI-DSS v4.0 Network Segmentation Gate", "state": "In Progress", "type": "Epic", "severity": "Critical"},
-                    {"id": "ADO-1088", "title": "Implement Redis Session Backplane for Microservices", "state": "Active", "type": "User Story", "points": 8},
-                    {"id": "ADO-1120", "title": "Payment Microservice Latency Optimization", "state": "Blocked", "type": "Bug", "priority": 1}
-                ],
-                "sprint_telemetry": {
-                    "iteration": iteration_path or "Sprint 5 (Current)",
-                    "total_points": 340,
-                    "completed_points": 280,
-                    "pipeline_success_rate": "98.4%",
-                    "pr_cycle_time_hours": 4.2
-                }
+                "success": False,
+                "error": "Azure DevOps connector is not configured or connected for this project.",
+                "work_items": [],
+                "sprint_telemetry": {}
             }
 
         ado_url_str = str(ado_url).strip().rstrip('/')
         ado_pat_str = str(ado_pat).strip()
-
-        if ado_url_str == "https://dev.azure.com/demo-pwc-enterprise" and ado_pat_str == "DEMO_AZURE_DEVOPS_PAT_2026":
-            return {
-                "success": True,
-                "provider": "azure_devops",
-                "project": project_name,
-                "work_items": [
-                    {"id": "ADO-1042", "title": "PCI-DSS v4.0 Network Segmentation Gate", "state": "In Progress", "type": "Epic", "severity": "Critical"},
-                    {"id": "ADO-1088", "title": "Implement Redis Session Backplane for Microservices", "state": "Active", "type": "User Story", "points": 8},
-                    {"id": "ADO-1120", "title": "Payment Microservice Latency Optimization", "state": "Blocked", "type": "Bug", "priority": 1}
-                ],
-                "sprint_telemetry": {
-                    "iteration": iteration_path or "Sprint 5 (Current)",
-                    "total_points": 340,
-                    "completed_points": 280,
-                    "pipeline_success_rate": "98.4%",
-                    "pr_cycle_time_hours": 4.2
-                }
-            }
 
         try:
             auth = ('', ado_pat_str)

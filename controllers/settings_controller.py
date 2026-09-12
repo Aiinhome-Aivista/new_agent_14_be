@@ -19,18 +19,6 @@ DEMO_PRESETS = {
         "username_email": "dipakkrsaha44@gmail.com",
         "api_token": "ATATT3xFfGF0o2M-o3hxSh4XCKwBcrLO5EvrYYVjZ-DO60zGU6LuMpqMext-Uwy664taZSs1uS8ifdZaIHboUlaG1gKf5C_1rp6tUhYGt7S1G39ramjutsJwM9RrvvXG71mDV9nfXgRk8gcyPG3YBp1DMgYHOfaxkDJGQ0JQo63jr92dgdpGHIs=07F60D9C"
     },
-    "azure_devops": {
-        "provider": "azure_devops",
-        "base_url": "https://dev.azure.com/demo-pwc-enterprise",
-        "username_email": "devops.lead@pwc-vpm.com",
-        "api_token": "DEMO_AZURE_DEVOPS_PAT_2026"
-    },
-    "onedrive": {
-        "provider": "onedrive",
-        "base_url": "https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive",
-        "username_email": "onedrive.pmo@pwc-enterprise.com",
-        "api_token": "DEMO_ONEDRIVE_ACCESS_TOKEN_2026"
-    },
     "sap_erp": {
         "provider": "sap_erp",
         "base_url": "https://demo-s4hana.enterprise.pwc/sap/opu/odata",
@@ -250,13 +238,14 @@ def load_demo_presets():
     project_id = get_requested_project_id()
     target_provider = request.json.get("provider") if request.json else None
     
-    if target_provider == 'google_drive':
+    if target_provider in ('google_drive', 'azure_devops', 'onedrive'):
+        prov_name = target_provider.replace('_', ' ').title()
         return jsonify({
             "success": False,
-            "error": "Google Drive requires a real OAuth 2.0 Access Token. Mock demo sandbox is disabled for Google Drive."
+            "error": f"{prov_name} requires real enterprise credentials and live authentication. Mock demo sandbox is disabled."
         }), 400
 
-    providers_to_seed = [target_provider] if target_provider and target_provider in DEMO_PRESETS else [p for p in DEMO_PRESETS.keys() if p != 'google_drive']
+    providers_to_seed = [target_provider] if target_provider and target_provider in DEMO_PRESETS else [p for p in DEMO_PRESETS.keys() if p not in ('google_drive', 'azure_devops', 'onedrive')]
     
     seeded = {}
     for prov in providers_to_seed:

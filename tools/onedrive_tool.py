@@ -62,21 +62,6 @@ class OneDriveTool:
                 "error": f"Invalid OneDrive URL format '{drive_url}'. Must start with https://."
             }
 
-        # 1-Click Demo Sandbox Preset verification
-        if "DEMO_ONEDRIVE_ACCESS_TOKEN_2026" in api_token or "enterprise-pwc.sharepoint.com" in drive_url:
-            return {
-                "success": True,
-                "server": drive_url,
-                "user": account_email or "Microsoft 365 Service Principal (Sandboxed)",
-                "drive_type": "OneDrive for Business (E5 Enterprise)",
-                "files_discovered": [
-                    "Vendor_Master_Services_Agreement_2026.docx",
-                    "Q3_Capital_Milestone_Signoff_Deck.pptx",
-                    "Enterprise_Infra_Budget_Runrate.xlsx"
-                ],
-                "is_sandbox": True
-            }
-
         try:
             # Live Microsoft Graph API ping
             headers = {"Authorization": f"Bearer {api_token}"}
@@ -94,47 +79,63 @@ class OneDriveTool:
             elif resp.status_code in [401, 403]:
                 return {"success": False, "error": f"OneDrive authentication failed (HTTP {resp.status_code}): Invalid Graph API Token or expired secret."}
             return {"success": False, "error": f"OneDrive / Graph API returned HTTP {resp.status_code}: {resp.text[:150]}"}
+        except requests.exceptions.RequestException as e:
+            return {"success": False, "error": f"Network error connecting to Microsoft Graph API: {str(e)[:150]}"}
         except Exception as e:
-            return {
-                "success": True,
-                "server": drive_url,
-                "user": account_email or "Microsoft 365 Cloud Principal",
-                "is_sandbox": True,
-                "warning": f"Connected with local simulation: {str(e)[:80]}"
-            }
+            return {"success": False, "error": f"Connection verification failed: {str(e)[:150]}"}
 
     @staticmethod
     def execute(project_id=None) -> Dict[str, Any]:
         """
         Discovers project documents from the linked OneDrive repository.
         """
-        drive_url, account_email, _ = OneDriveTool.get_credentials(project_id=project_id)
+        drive_url, account_email, api_token = OneDriveTool.get_credentials(project_id=project_id)
         
-        return {
-            "success": True,
-            "provider": "onedrive",
-            "drive_url": drive_url,
-            "documents": [
-                {
-                    "name": "Vendor_Master_Services_Agreement_2026.docx",
-                    "size": "2.1 MB",
-                    "last_modified": "2026-09-09",
-                    "source": "Microsoft OneDrive"
-                },
-                {
-                    "name": "Q3_Capital_Milestone_Signoff_Deck.pptx",
-                    "size": "4.5 MB",
-                    "last_modified": "2026-09-07",
-                    "source": "Microsoft OneDrive"
-                },
-                {
-                    "name": "Enterprise_Infra_Budget_Runrate.xlsx",
-                    "size": "1.9 MB",
-                    "last_modified": "2026-09-05",
-                    "source": "Microsoft OneDrive"
+        import db
+        from models.integration_setting import IntegrationSetting
+        setting = None
+        if db.db_session and project_id:
+            setting = db.db_session.query(IntegrationSetting).filter_by(provider='onedrive', project_id=project_id).first()
+        
+        if not (setting and setting.is_connected and api_token):
+            return {
+                "success": False,
+                "error": "OneDrive connector is not configured or not connected for this project.",
+                "documents": []
+            }
+
+        try:
+            headers = {"Authorization": f"Bearer {api_token}"}
+            resp = requests.get("https://graph.microsoft.com/v1.0/me/drive/root/children", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                items = resp.json().get("value", [])
+                docs = []
+                for it in items:
+                    if "file" in it:
+                        size_mb = round(it.get('size', 0) / (1024 * 1024), 2)
+                        docs.append({
+                            "name": it.get("name"),
+                            "size": f"{size_mb} MB",
+                            "last_modified": it.get("lastModifiedDateTime", "")[:10],
+                            "source": "Microsoft OneDrive"
+                        })
+                return {
+                    "success": True,
+                    "provider": "onedrive",
+                    "drive_url": drive_url,
+                    "documents": docs
                 }
-            ]
-        }
+            return {
+                "success": False,
+                "error": f"OneDrive Graph API returned HTTP {resp.status_code}",
+                "documents": []
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error fetching OneDrive documents: {str(e)[:150]}",
+                "documents": []
+            }
 
     @staticmethod
     def sync_project_onedrive(project_id: int) -> Dict[str, Any]:

@@ -81,11 +81,11 @@ CREATE TABLE dashboard_snapshots (
 
 CREATE TABLE projects (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
-	jira_key VARCHAR(50) NOT NULL, 
+	jira_key VARCHAR(50) NULL, 
 	name VARCHAR(255) NOT NULL, 
 	description TEXT,
-	status VARCHAR(50), 
-	created_at DATETIME, 
+	status VARCHAR(50) DEFAULT 'Active', 
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP, 
 	PRIMARY KEY (id), 
 	UNIQUE (jira_key)
 )

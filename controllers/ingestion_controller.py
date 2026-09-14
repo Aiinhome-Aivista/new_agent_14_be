@@ -63,6 +63,20 @@ def upload_file():
         uploaded_by_role = user_info.get('role') or request.form.get('uploaded_by_role') or 'Project Manager'
         risks_detected = result.get('risks_detected', 0) if isinstance(result, dict) else 0
 
+        from models.project import Project
+        valid_pid = None
+        if project_id:
+            try:
+                p = db.db_session.query(Project).filter_by(id=project_id).first()
+                if p:
+                    valid_pid = p.id
+                else:
+                    first_p = db.db_session.query(Project).first()
+                    if first_p:
+                        valid_pid = first_p.id
+            except Exception:
+                valid_pid = None
+
         doc_record = UploadedDocument(
             filename=file.filename,
             file_type=ext,
@@ -70,7 +84,7 @@ def upload_file():
             file_size_formatted=size_fmt,
             uploaded_by=uploaded_by,
             uploaded_by_role=uploaded_by_role,
-            project_id=project_id,
+            project_id=valid_pid,
             status="Indexed in Vector Memory",
             risks_detected=risks_detected,
             created_at=datetime.now(timezone.utc)
@@ -95,13 +109,11 @@ def list_ingestion_history():
     from models.project import Project
     
     docs = []
-    has_project_filter = False
     try:
         if db.db_session:
             query = db.db_session.query(UploadedDocument)
             project_id_param = request.args.get('project_id')
             if project_id_param and str(project_id_param).strip().lower() not in ('all', '', 'none', 'null'):
-                has_project_filter = True
                 pid = None
                 if str(project_id_param).isdigit():
                     pid = int(project_id_param)
@@ -120,39 +132,7 @@ def list_ingestion_history():
     except Exception as exc:
         print(f"Error querying uploaded_documents: {exc}")
 
-    # Fallback to filesystem ONLY if:
-    # 1. No specific project was requested (has_project_filter is False)
-    # 2. AND the database has absolutely no records across all projects
-    if not docs and not has_project_filter:
-        try:
-            total_db_count = db.db_session.query(UploadedDocument).count() if db.db_session else 0
-        except Exception:
-            total_db_count = 0
-
-        if total_db_count == 0:
-            uploads_dir = os.path.join(os.getcwd(), 'uploads')
-            if os.path.exists(uploads_dir):
-                import time
-                for fname in sorted(os.listdir(uploads_dir), reverse=True):
-                    fpath = os.path.join(uploads_dir, fname)
-                    if os.path.isfile(fpath):
-                        stat = os.stat(fpath)
-                        size_kb = stat.st_size / 1024
-                        size_fmt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb / 1024):.2f} MB"
-                        ext = os.path.splitext(fname)[1].lstrip('.').upper() or 'TXT'
-                        time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))
-                        docs.append({
-                            "id": fname,
-                            "filename": fname,
-                            "file_type": ext,
-                            "size": size_fmt,
-                            "uploaded_at": time_str,
-                            "uploaded_by": "pm@example.com",
-                            "uploaded_by_role": "Project Manager",
-                            "risks_detected": 0,
-                            "status": "Indexed in Vector Memory",
-                            "indexed": True
-                        })
+    # ONLY return records that exist in the database (no filesystem fallback)
     return jsonify(docs)
 
 

@@ -159,13 +159,7 @@ class SharePointTool:
                 
                 project = db.db_session.query(Project).filter_by(jira_key=sp_key).first()
                 if not project:
-                    project = Project(
-                        jira_key=sp_key,
-                        name=lib_name,
-                        status='Active'
-                    )
-                    db.db_session.add(project)
-                    synced_projects += 1
+                    continue
                 else:
                     if project.name != lib_name:
                         project.name = lib_name

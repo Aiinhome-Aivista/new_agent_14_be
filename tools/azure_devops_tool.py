@@ -273,13 +273,7 @@ class AzureDevOpsTool:
                 
                 project = db.db_session.query(Project).filter_by(jira_key=ado_key).first()
                 if not project:
-                    project = Project(
-                        jira_key=ado_key,
-                        name=proj_name,
-                        status='Active'
-                    )
-                    db.db_session.add(project)
-                    synced_projects += 1
+                    continue
                 else:
                     if project.name != proj_name:
                         project.name = proj_name

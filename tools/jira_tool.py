@@ -398,16 +398,10 @@ class JiraTool:
                 if not proj_name or not proj_key:
                     continue
 
-                # Upsert Project directly
+                # Do not auto-create projects from Jira. Only user-created projects are tracked.
                 project = db.db_session.query(Project).filter_by(jira_key=proj_key).first()
                 if not project:
-                    project = Project(
-                        jira_key=proj_key,
-                        name=proj_name,
-                        status='Active'
-                    )
-                    db.db_session.add(project)
-                    synced_projects += 1
+                    continue
                 else:
                     if project.name != proj_name:
                         project.name = proj_name

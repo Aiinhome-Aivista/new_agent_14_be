@@ -175,13 +175,7 @@ class SapErpTool:
                 
                 project = db.db_session.query(Project).filter_by(jira_key=sap_key).first()
                 if not project:
-                    project = Project(
-                        jira_key=sap_key,
-                        name=cc_name,
-                        status='Active'
-                    )
-                    db.db_session.add(project)
-                    synced_projects += 1
+                    continue
                 else:
                     if project.name != cc_name:
                         project.name = cc_name

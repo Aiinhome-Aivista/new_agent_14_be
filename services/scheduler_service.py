@@ -112,10 +112,7 @@ class SchedulerService:
                 jira_setting = settings_map.get("jira")
                 if jira_setting and jira_setting.is_connected:
                     results["jira"] = JiraTool.test_connection()
-                    if results["jira"].get("success"):
-                        # Also sync projects and programs to db
-                        sync_res = JiraTool.sync_projects_to_db()
-                        logger.info(f"Jira Project Sync Result: {sync_res}")
+                    # Note: Automatic project injection disabled so user has full control over created projects
                 else:
                     results["jira"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
@@ -126,9 +123,6 @@ class SchedulerService:
                 ado_setting = settings_map.get("azure_devops")
                 if ado_setting and ado_setting.is_connected:
                     results["azure_devops"] = AzureDevOpsTool.test_connection()
-                    if results["azure_devops"].get("success"):
-                        sync_res = AzureDevOpsTool.sync_projects_to_db()
-                        logger.info(f"Azure DevOps Project Sync Result: {sync_res}")
                 else:
                     results["azure_devops"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
@@ -139,9 +133,6 @@ class SchedulerService:
                 sap_setting = settings_map.get("sap_erp")
                 if sap_setting and sap_setting.is_connected:
                     results["sap_erp"] = SapErpTool.test_connection()
-                    if results["sap_erp"].get("success"):
-                        sync_res = SapErpTool.sync_projects_to_db()
-                        logger.info(f"SAP ERP Cost Center Sync Result: {sync_res}")
                 else:
                     results["sap_erp"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:
@@ -152,9 +143,6 @@ class SchedulerService:
                 sp_setting = settings_map.get("sharepoint")
                 if sp_setting and sp_setting.is_connected:
                     results["sharepoint"] = SharepointTool.test_connection()
-                    if results["sharepoint"].get("success"):
-                        sync_res = SharepointTool.sync_projects_to_db()
-                        logger.info(f"SharePoint Document Library Sync Result: {sync_res}")
                 else:
                     results["sharepoint"] = {"success": False, "error": "Connector not enabled or disconnected in UI"}
             except Exception as e:

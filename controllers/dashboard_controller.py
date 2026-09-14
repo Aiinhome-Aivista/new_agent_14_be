@@ -5,6 +5,7 @@ from models.project import Project
 from models.risk_register import RiskRegister
 from models.budget import Budget
 from models.approval_queue import ApprovalQueue
+from controllers.risks_controller import enrich_risk_dict
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -775,6 +776,19 @@ def get_snapshot():
         high_ids=high_ids
     )
 
+    # Dynamic Project Risks (Enriched with Category, Severity, Exposure & Drilldown Links)
+    def risk_sort_key(r):
+        sev_map = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        return (sev_map.get(str(r.severity).lower(), 4), -r.id)
+
+    sorted_risks = sorted(all_risks, key=risk_sort_key)
+    all_projs_map = {p.id: p for p in all_projs}
+    enriched_project_risks = [enrich_risk_dict(r, all_projs_map) for r in sorted_risks]
+    snap_data["project_risks"] = enriched_project_risks
+    snap_data["recent_risks"] = enriched_project_risks[:5]
+    snap_data["total_project_risks"] = len(all_risks)
+    snap_data["risks"] = enriched_project_risks
+
     snap_dict['data'] = snap_data
     return jsonify(snap_dict)
 
@@ -907,6 +921,13 @@ def get_project_details(project_id):
             }
         ]
 
+    def proj_risk_sort_key(r):
+        sev_map = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        return (sev_map.get(str(r.severity).lower(), 4), -r.id)
+
+    sorted_project_risks = sorted(risks, key=proj_risk_sort_key)
+    enriched_project_risks = [enrich_risk_dict(r, {project.id: project}) for r in sorted_project_risks]
+
     project_data = {
         "id": project.jira_key,
         "numeric_id": project.id,
@@ -921,7 +942,9 @@ def get_project_details(project_id):
             {"label": "Medium", "color": "bg-hover", "items": med},
             {"label": "Low", "color": "bg-borderOrange", "items": low}
         ],
-        "risk_details": [r.to_dict() for r in risks]
+        "risk_details": enriched_project_risks,
+        "recent_risks": enriched_project_risks[:5],
+        "total_project_risks": len(risks)
     }
 
     return jsonify(project_data)

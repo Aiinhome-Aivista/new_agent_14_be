@@ -105,7 +105,6 @@ class SharePointTool:
         """
         import requests
         import db
-        from models.program import Program
         from models.project import Project
         from models.integration_setting import IntegrationSetting
 
@@ -148,13 +147,6 @@ class SharePointTool:
                 else:
                     return {"success": False, "error": f"SharePoint API HTTP {resp.status_code}"}
 
-            program_name = "SharePoint Document Libraries"
-            program = db.db_session.query(Program).filter_by(name=program_name).first()
-            if not program:
-                program = Program(name=program_name, description="Document Libraries imported from SharePoint")
-                db.db_session.add(program)
-                db.db_session.flush()
-
             synced_projects = 0
             for lib in libraries:
                 lib_name = lib.get("name")
@@ -168,7 +160,6 @@ class SharePointTool:
                 project = db.db_session.query(Project).filter_by(jira_key=sp_key).first()
                 if not project:
                     project = Project(
-                        program_id=program.id,
                         jira_key=sp_key,
                         name=lib_name,
                         status='Active'
@@ -176,9 +167,8 @@ class SharePointTool:
                     db.db_session.add(project)
                     synced_projects += 1
                 else:
-                    if project.name != lib_name or project.program_id != program.id:
+                    if project.name != lib_name:
                         project.name = lib_name
-                        project.program_id = program.id
                         synced_projects += 1
 
             db.db_session.commit()

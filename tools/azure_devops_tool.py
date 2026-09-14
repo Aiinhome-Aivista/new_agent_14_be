@@ -115,7 +115,6 @@ class AzureDevOpsTool:
         """
         import requests
         import db
-        from models.program import Program
         from models.project import Project
         from models.integration_setting import IntegrationSetting
 
@@ -217,7 +216,6 @@ class AzureDevOpsTool:
         """
         import requests
         import db
-        from models.program import Program
         from models.project import Project
         from models.integration_setting import IntegrationSetting
 
@@ -261,13 +259,6 @@ class AzureDevOpsTool:
                 else:
                     return {"success": False, "error": f"Azure DevOps API HTTP {resp.status_code}"}
 
-            program_name = "Azure DevOps Imported Program"
-            program = db.db_session.query(Program).filter_by(name=program_name).first()
-            if not program:
-                program = Program(name=program_name, description="Imported from Azure DevOps")
-                db.db_session.add(program)
-                db.db_session.flush()
-
             synced_projects = 0
             for proj in projects_data:
                 proj_name = proj.get("name")
@@ -283,7 +274,6 @@ class AzureDevOpsTool:
                 project = db.db_session.query(Project).filter_by(jira_key=ado_key).first()
                 if not project:
                     project = Project(
-                        program_id=program.id,
                         jira_key=ado_key,
                         name=proj_name,
                         status='Active'
@@ -291,9 +281,8 @@ class AzureDevOpsTool:
                     db.db_session.add(project)
                     synced_projects += 1
                 else:
-                    if project.name != proj_name or project.program_id != program.id:
+                    if project.name != proj_name:
                         project.name = proj_name
-                        project.program_id = program.id
                         synced_projects += 1
 
             db.db_session.commit()

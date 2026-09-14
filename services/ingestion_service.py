@@ -121,25 +121,17 @@ class IngestionService:
         risk_output = final_state.get("risk", {})
         detected_risks = risk_output.get("risks", []) or risk_output.get("detected_risks", [])
         
-        # Resolve valid project and program for foreign key integrity
+        # Resolve valid project for foreign key integrity
         from models.project import Project
-        from models.program import Program
 
         proj = db.db_session.query(Project).filter_by(id=project_id).first()
         if not proj:
             proj = db.db_session.query(Project).first()
             if not proj:
-                prog = db.db_session.query(Program).first()
-                if not prog:
-                    prog = Program(name="Alpha Migration", description="Core migration program")
-                    db.db_session.add(prog)
-                    db.db_session.commit()
-                proj = Project(program_id=prog.id, jira_key=f"PRJ-{project_id}", name=f"Project {project_id}")
+                proj = Project(jira_key=f"PRJ-{project_id}", name=f"Project {project_id}")
                 db.db_session.add(proj)
                 db.db_session.commit()
             project_id = proj.id
-
-        prog_id = proj.program_id if proj else None
 
         for idx, r in enumerate(detected_risks):
             r_id = r.get("id") if isinstance(r, dict) and r.get("id") else f"R-{random.randint(100, 999)}"
@@ -213,7 +205,6 @@ class IngestionService:
                         snapshot_data["milestones"] = prev_data["milestones"]
 
         snapshot = DashboardSnapshot(
-            program_id=prog_id,
             data=snapshot_data
         )
         db.db_session.add(snapshot)

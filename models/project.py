@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime, timezone
 from db import Base
 
@@ -6,7 +6,6 @@ class Project(Base):
     __tablename__ = 'projects'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    program_id = Column(Integer, ForeignKey('programs.id'), nullable=False)
     jira_key = Column(String(50), nullable=False, unique=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
@@ -16,7 +15,6 @@ class Project(Base):
     def to_dict(self):
         return {
             'id': self.id,
-            'program_id': self.program_id,
             'jira_key': self.jira_key,
             'name': self.name,
             'description': self.description,

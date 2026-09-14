@@ -357,7 +357,6 @@ class JiraTool:
         import requests
         from requests.auth import HTTPBasicAuth
         import db
-        from models.program import Program
         from models.project import Project
 
         jira_url, jira_email, jira_token = JiraTool.get_credentials()
@@ -379,7 +378,7 @@ class JiraTool:
             headers = {"Accept": "application/json"}
             auth = HTTPBasicAuth(jira_email, jira_token)
 
-            search_url = f"{base_url}/rest/api/3/project/search?expand=projectCategory"
+            search_url = f"{base_url}/rest/api/3/project/search"
             response = requests.get(search_url, headers=headers, auth=auth, timeout=10)
 
             if response.status_code != 200:
@@ -390,7 +389,6 @@ class JiraTool:
                 }
 
             projects_data = response.json().get("values", [])
-            synced_programs = 0
             synced_projects = 0
 
             for proj in projects_data:
@@ -400,25 +398,10 @@ class JiraTool:
                 if not proj_name or not proj_key:
                     continue
 
-                category = proj.get("projectCategory", {})
-                category_name = category.get("name", "Jira Uncategorized Program")
-
-                # Upsert Program
-                program = db.db_session.query(Program).filter_by(name=category_name).first()
-                if not program:
-                    program = Program(
-                        name=category_name,
-                        description=category.get("description", "Imported from Jira Project Categories")
-                    )
-                    db.db_session.add(program)
-                    db.db_session.flush() # To get program.id
-                    synced_programs += 1
-                
-                # Upsert Project
+                # Upsert Project directly
                 project = db.db_session.query(Project).filter_by(jira_key=proj_key).first()
                 if not project:
                     project = Project(
-                        program_id=program.id,
                         jira_key=proj_key,
                         name=proj_name,
                         status='Active'
@@ -426,9 +409,8 @@ class JiraTool:
                     db.db_session.add(project)
                     synced_projects += 1
                 else:
-                    if project.name != proj_name or project.program_id != program.id:
+                    if project.name != proj_name:
                         project.name = proj_name
-                        project.program_id = program.id
                         synced_projects += 1
 
             db.db_session.commit()

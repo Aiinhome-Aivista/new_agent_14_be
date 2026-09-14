@@ -1264,5 +1264,9 @@ class ReportingAgent:
         return {
             "dashboard_data": structured_dashboard,
             "narrative_summary": narrative,
-            "report_file_path": final_report_file
+            "report_file_path": final_report_file,
+            "docx_path": docx_path,
+            "pdf_path": pdf_path,
+            "docx_filename": docx_filename,
+            "pdf_filename": pdf_filename
         }

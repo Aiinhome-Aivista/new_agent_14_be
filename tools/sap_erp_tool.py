@@ -117,7 +117,6 @@ class SapErpTool:
         """
         import requests
         import db
-        from models.program import Program
         from models.project import Project
         from models.integration_setting import IntegrationSetting
 
@@ -164,13 +163,6 @@ class SapErpTool:
                 else:
                     return {"success": False, "error": f"SAP ERP API HTTP {resp.status_code}"}
 
-            program_name = "SAP ERP Cost Centers"
-            program = db.db_session.query(Program).filter_by(name=program_name).first()
-            if not program:
-                program = Program(name=program_name, description="Cost Centers imported from SAP S/4HANA")
-                db.db_session.add(program)
-                db.db_session.flush()
-
             synced_projects = 0
             for cc in cost_centers:
                 cc_id = cc.get("CostCenter")
@@ -184,7 +176,6 @@ class SapErpTool:
                 project = db.db_session.query(Project).filter_by(jira_key=sap_key).first()
                 if not project:
                     project = Project(
-                        program_id=program.id,
                         jira_key=sap_key,
                         name=cc_name,
                         status='Active'
@@ -192,9 +183,8 @@ class SapErpTool:
                     db.db_session.add(project)
                     synced_projects += 1
                 else:
-                    if project.name != cc_name or project.program_id != program.id:
+                    if project.name != cc_name:
                         project.name = cc_name
-                        project.program_id = program.id
                         synced_projects += 1
 
             db.db_session.commit()

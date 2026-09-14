@@ -6,7 +6,6 @@ class KPI(Base):
     __tablename__ = 'kpis'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    program_id = Column(Integer, ForeignKey('programs.id'), nullable=True)
     project_id = Column(Integer, ForeignKey('projects.id'), nullable=True)
     metric_name = Column(String(100), nullable=False) # e.g. SPI, CPI, Budget Variance
     metric_value = Column(Float, nullable=False)
@@ -17,7 +16,6 @@ class KPI(Base):
     def to_dict(self):
         return {
             'id': self.id,
-            'program_id': self.program_id,
             'project_id': self.project_id,
             'metric_name': self.metric_name,
             'metric_value': self.metric_value,

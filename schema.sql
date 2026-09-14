@@ -57,17 +57,6 @@ CREATE TABLE procedural_patterns (
 ;
 
 
-CREATE TABLE programs (
-	id INTEGER NOT NULL AUTO_INCREMENT, 
-	name VARCHAR(255) NOT NULL, 
-	description TEXT, 
-	created_at DATETIME, 
-	PRIMARY KEY (id)
-)
-
-;
-
-
 CREATE TABLE users (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
 	email VARCHAR(255) NOT NULL, 
@@ -82,11 +71,9 @@ CREATE TABLE users (
 
 CREATE TABLE dashboard_snapshots (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
-	program_id INTEGER, 
 	data JSON NOT NULL, 
 	created_at DATETIME, 
-	PRIMARY KEY (id), 
-	FOREIGN KEY(program_id) REFERENCES programs (id)
+	PRIMARY KEY (id)
 )
 
 ;
@@ -94,13 +81,12 @@ CREATE TABLE dashboard_snapshots (
 
 CREATE TABLE projects (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
-	program_id INTEGER NOT NULL, 
 	jira_key VARCHAR(50) NOT NULL, 
 	name VARCHAR(255) NOT NULL, 
+	description TEXT,
 	status VARCHAR(50), 
 	created_at DATETIME, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(program_id) REFERENCES programs (id), 
 	UNIQUE (jira_key)
 )
 
@@ -124,7 +110,6 @@ CREATE TABLE budgets (
 
 CREATE TABLE kpis (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
-	program_id INTEGER, 
 	project_id INTEGER, 
 	metric_name VARCHAR(100) NOT NULL, 
 	metric_value FLOAT NOT NULL, 
@@ -132,7 +117,6 @@ CREATE TABLE kpis (
 	trend_label VARCHAR(100), 
 	created_at DATETIME, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(program_id) REFERENCES programs (id), 
 	FOREIGN KEY(project_id) REFERENCES projects (id)
 )
 
@@ -201,6 +185,22 @@ CREATE TABLE uploaded_documents (
 	FOREIGN KEY (project_id) REFERENCES projects (id)
 );
 
+CREATE TABLE generated_reports (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	project_id INTEGER,
+	name VARCHAR(255) NOT NULL,
+	filename VARCHAR(255) NOT NULL,
+	file_type VARCHAR(50) NOT NULL,
+	report_type VARCHAR(100) DEFAULT 'Executive Briefing',
+	file_size VARCHAR(50),
+	file_path VARCHAR(500) NOT NULL,
+	summary TEXT,
+	generated_by VARCHAR(100),
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
 -- ==========================================
 -- DEFAULT INITIAL SEED DATA
 -- ==========================================
@@ -213,14 +213,10 @@ INSERT INTO users (id, email, password_hash, `role`) VALUES
 (4, 'pm@example.com', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Project Manager')
 ON DUPLICATE KEY UPDATE email=email;
 
--- 2. Initial Program & Projects
-INSERT INTO programs (id, name, description, created_at) VALUES
-(1, 'Alpha Migration', 'Migrating core legacy monolithic services to cloud microservices', NOW())
-ON DUPLICATE KEY UPDATE name=name;
-
-INSERT INTO projects (id, program_id, jira_key, name, status, created_at) VALUES
-(1, 1, 'PRJ-101', 'Frontend Rewrite', 'Active', NOW()),
-(2, 1, 'PRJ-102', 'Cloud Infrastructure Migration', 'Active', NOW())
+-- 2. Initial Projects
+INSERT INTO projects (id, jira_key, name, status, created_at) VALUES
+(1, 'PRJ-101', 'Frontend Rewrite', 'Active', NOW()),
+(2, 'PRJ-102', 'Cloud Infrastructure Migration', 'Active', NOW())
 ON DUPLICATE KEY UPDATE jira_key=jira_key;
 
 -- 3. Initial Budgets
@@ -258,8 +254,8 @@ INSERT INTO approval_queue (id, action_type, payload, status, reasoning, created
 ON DUPLICATE KEY UPDATE id=id;
 
 -- 7. Initial Dashboard Snapshot
-INSERT INTO dashboard_snapshots (id, program_id, data, created_at) VALUES
-(1, 1, '{"name": "Alpha Migration Program", "id": "PRJ-101", "kpis": [{"title": "Program Budget", "value": "$1.2M / $1.5M", "trend": "up", "trendLabel": "80% Burned"}, {"title": "Budget Variance", "value": "$300K Surplus", "trend": "down", "trendLabel": "Under Budget"}, {"title": "Active Risks", "value": "4", "trend": "up", "trendLabel": "2 Critical"}, {"title": "Overall Health", "value": "75%", "trend": "neutral", "trendLabel": "Moderate Risk"}], "burndown": [{"sprint": "Sprint 1", "planned": 100, "actual": 95}, {"sprint": "Sprint 2", "planned": 80, "actual": 82}, {"sprint": "Sprint 3", "planned": 60, "actual": 65}, {"sprint": "Sprint 4", "planned": 40, "actual": 40}, {"sprint": "Sprint 5", "planned": 20, "actual": 18}, {"sprint": "Sprint 6", "planned": 0, "actual": null}], "risks": [{"label": "Critical", "color": "bg-primary", "items": ["R-102", "R-145"]}, {"label": "High", "color": "bg-button", "items": ["R-099"]}, {"label": "Medium", "color": "bg-hover", "items": ["R-042"]}, {"label": "Low", "color": "bg-borderOrange", "items": ["R-011"]}], "financials": {"totalBudget": 1500000, "spent": 1200000, "remaining": 300000, "projectedVariance": -50000}, "milestones": [{"name": "Architecture Sign-off", "date": "Jan 15", "status": "completed"}, {"name": "MVP Delivery", "date": "Feb 28", "status": "completed"}, {"name": "Beta Rollout", "date": "Mar 30", "status": "in-progress"}, {"name": "Full Migration", "date": "Apr 30", "status": "pending"}]}', NOW())
+INSERT INTO dashboard_snapshots (id, data, created_at) VALUES
+(1, '{"name": "Frontend Rewrite", "id": "PRJ-101", "kpis": [{"title": "Project Budget", "value": "$1.2M / $1.5M", "trend": "up", "trendLabel": "80% Burned"}, {"title": "Budget Variance", "value": "$300K Surplus", "trend": "down", "trendLabel": "Under Budget"}, {"title": "Active Risks", "value": "4", "trend": "up", "trendLabel": "2 Critical"}, {"title": "Overall Health", "value": "75%", "trend": "neutral", "trendLabel": "Moderate Risk"}], "burndown": [{"sprint": "Sprint 1", "planned": 100, "actual": 95}, {"sprint": "Sprint 2", "planned": 80, "actual": 82}, {"sprint": "Sprint 3", "planned": 60, "actual": 65}, {"sprint": "Sprint 4", "planned": 40, "actual": 40}, {"sprint": "Sprint 5", "planned": 20, "actual": 18}, {"sprint": "Sprint 6", "planned": 0, "actual": null}], "risks": [{"label": "Critical", "color": "bg-primary", "items": ["R-102", "R-145"]}, {"label": "High", "color": "bg-button", "items": ["R-099"]}, {"label": "Medium", "color": "bg-hover", "items": ["R-042"]}, {"label": "Low", "color": "bg-borderOrange", "items": ["R-011"]}], "financials": {"totalBudget": 1500000, "spent": 1200000, "remaining": 300000, "projectedVariance": -50000}, "milestones": [{"name": "Architecture Sign-off", "date": "Jan 15", "status": "completed"}, {"name": "MVP Delivery", "date": "Feb 28", "status": "completed"}, {"name": "Beta Rollout", "date": "Mar 30", "status": "in-progress"}, {"name": "Full Migration", "date": "Apr 30", "status": "pending"}]}', NOW())
 ON DUPLICATE KEY UPDATE id=id;
 
 -- 8. Project-Wise Enterprise Connectors & Integration Settings

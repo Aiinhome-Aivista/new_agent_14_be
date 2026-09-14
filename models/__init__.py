@@ -1,6 +1,5 @@
 from .agent_episode import AgentEpisode
 from .procedural_pattern import ProceduralPattern
-from .program import Program
 from .project import Project
 from .budget import Budget
 from .risk_register import RiskRegister
@@ -9,3 +8,4 @@ from .dashboard_snapshot import DashboardSnapshot
 from .approval_queue import ApprovalQueue
 from .agent_run_log import AgentRunLog
 from .uploaded_document import UploadedDocument
+from .generated_report import GeneratedReport

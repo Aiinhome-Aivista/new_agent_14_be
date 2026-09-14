@@ -1,7 +1,6 @@
 from flask import Blueprint, jsonify, request
 import db
 from models.project import Project
-from models.program import Program
 from models.budget import Budget
 from models.risk_register import RiskRegister
 from models.uploaded_document import UploadedDocument
@@ -55,16 +54,8 @@ def list_projects():
             # 3. Document count
             doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=p.id).count()
 
-            # 4. Program name
-            prog_name = "Enterprise Portfolio"
-            if p.program_id:
-                prog = db.db_session.query(Program).filter_by(id=p.program_id).first()
-                if prog and prog.name:
-                    prog_name = prog.name
-
             p_dict = p.to_dict()
             p_dict.update({
-                'program_name': prog_name,
                 'health_score': health_score,
                 'planned_spend': pl_val,
                 'actual_spend': ac_val,
@@ -91,18 +82,17 @@ def list_projects():
 
 @project_bp.route('', methods=['POST'])
 @project_bp.route('/', methods=['POST'])
-@require_roles('PMO')
+@require_roles('PMO', 'Program Director')
 def create_project():
     """
     Creates a new project. STRICTLY RESTRICTED TO PMO.
-    Validates unique jira_key, creates program if needed, and initializes budget.
+    Validates unique jira_key and initializes budget.
     """
     data = request.json or {}
     name = (data.get('name') or '').strip()
     jira_key = (data.get('jira_key') or '').strip().upper()
     description = (data.get('description') or '').strip()
     status = (data.get('status') or 'Active').strip()
-    program_name = (data.get('program_name') or 'Enterprise Portfolio').strip()
     raw_budget = data.get('planned_spend', 1000000.0)
 
     if not name:
@@ -132,20 +122,8 @@ def create_project():
         except (ValueError, TypeError):
             planned_spend = 1000000.0
 
-        # Program association
-        program = db.db_session.query(Program).filter_by(name=program_name).first()
-        if not program:
-            program = Program(
-                name=program_name,
-                description=f"Program portfolio for {name}",
-                created_at=datetime.now(timezone.utc)
-            )
-            db.db_session.add(program)
-            db.db_session.flush()
-
-        # Create Project
+        # Create Project directly
         new_project = Project(
-            program_id=program.id,
             jira_key=jira_key,
             name=name,
             description=description,
@@ -170,7 +148,6 @@ def create_project():
 
         p_dict = new_project.to_dict()
         p_dict.update({
-            'program_name': program.name,
             'health_score': 95,
             'planned_spend': planned_spend,
             'actual_spend': 0.0,
@@ -225,9 +202,9 @@ def get_project(project_id):
 
 
 @project_bp.route('/<int:project_id>', methods=['PUT', 'PATCH'])
-@require_roles('PMO')
+@require_roles('PMO', 'Program Director')
 def update_project(project_id):
-    """Updates an existing project. PMO only."""
+    """Updates an existing project. PMO & Program Director."""
     project = db.db_session.query(Project).filter_by(id=project_id).first()
     if not project:
         return jsonify({'success': False, 'error': f"Project ID {project_id} not found"}), 404
@@ -295,9 +272,9 @@ def update_project(project_id):
 
 
 @project_bp.route('/<int:project_id>', methods=['DELETE'])
-@require_roles('PMO')
+@require_roles('PMO', 'Program Director')
 def delete_project(project_id):
-    """Deletes a project and its associated records. PMO only."""
+    """Deletes a project and its associated records. PMO & Program Director."""
     project = db.db_session.query(Project).filter_by(id=project_id).first()
     if not project:
         return jsonify({'success': False, 'error': f"Project ID {project_id} not found"}), 404

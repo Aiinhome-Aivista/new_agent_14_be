@@ -13,42 +13,29 @@ class JiraTool:
     @staticmethod
     def get_credentials(project_id=None):
         """
-        Resolves Jira credentials with priority:
-        1. DB IntegrationSetting for specific project_id
-        2. DB IntegrationSetting for project_id = 1 (default project)
-        3. Config / .env defaults
+        Resolves Jira credentials:
+        1. If project_id provided, strictly queries DB IntegrationSetting for that project_id where is_connected=True.
+           No fallback to .env or other projects.
+        2. If project_id is None, queries the first connected IntegrationSetting.
         """
         import db
         from models.integration_setting import IntegrationSetting
-        from config import Config
 
-        setting = None
-        if db.db_session:
-            try:
-                if project_id:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=project_id).first()
-                else:
-                    setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=1).first()
-                    if not setting:
-                        setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira').first()
-            except Exception:
-                setting = None
+        if not db.db_session:
+            return '', '', ''
 
-        if setting and setting.base_url:
-            jira_url = setting.base_url
-            jira_email = setting.username_email or ''
-            jira_token = setting.api_token or ''
-        elif not project_id:
-            # Only use environment defaults if no specific project was requested
-            jira_url = getattr(Config, 'JIRA_URL', None) or os.getenv('JIRA_URL') or os.getenv('JIRA_BASE_URL') or ''
-            jira_email = getattr(Config, 'JIRA_EMAIL', None) or os.getenv('JIRA_EMAIL') or ''
-            jira_token = getattr(Config, 'JIRA_API_TOKEN', None) or os.getenv('JIRA_API_TOKEN') or ''
-        else:
-            jira_url = ''
-            jira_email = ''
-            jira_token = ''
+        try:
+            if project_id:
+                setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=project_id, is_connected=True).first()
+            else:
+                setting = db.db_session.query(IntegrationSetting).filter_by(provider='jira', is_connected=True).first()
+        except Exception:
+            setting = None
 
-        return str(jira_url or '').strip(), str(jira_email or '').strip(), str(jira_token or '').strip()
+        if setting and setting.base_url and setting.is_connected:
+            return str(setting.base_url or '').strip(), str(setting.username_email or '').strip(), str(setting.api_token or '').strip()
+
+        return '', '', ''
 
     @staticmethod
     def get_schema() -> Dict[str, Any]:
@@ -63,7 +50,7 @@ class JiraTool:
                 "properties": {
                     "project_key": {
                         "type": "string",
-                        "description": "The Jira project key (e.g., PSSM, KAN)"
+                        "description": "The Jira project key (e.g., PSSM, KAN, PAY)"
                     },
                     "status": {
                         "type": "string",
@@ -76,15 +63,25 @@ class JiraTool:
         }
         
     @staticmethod
-    def test_connection(project_id=None) -> Dict[str, Any]:
+    def test_connection(project_id=None, base_url=None, username_email=None, api_token=None) -> Dict[str, Any]:
         """
         Tests connection to Jira Cloud using live Atlassian REST API (/rest/api/3/myself).
         """
         import requests
         from requests.auth import HTTPBasicAuth
         
-        jira_url, jira_email, jira_token = JiraTool.get_credentials(project_id=project_id)
-        
+        if base_url and username_email and api_token:
+            jira_url, jira_email, jira_token = base_url, username_email, api_token
+        else:
+            jira_url, jira_email, jira_token = JiraTool.get_credentials(project_id=project_id)
+            if not jira_url:
+                import db
+                from models.integration_setting import IntegrationSetting
+                if db.db_session and project_id:
+                    s = db.db_session.query(IntegrationSetting).filter_by(provider='jira', project_id=project_id).first()
+                    if s and s.base_url:
+                        jira_url, jira_email, jira_token = s.base_url, s.username_email, s.api_token
+
         if not jira_url or not jira_email or not jira_token:
             return {
                 "success": False, 
@@ -108,15 +105,13 @@ class JiraTool:
                     "server": base_url,
                     "user": display_name,
                     "email": user_info.get("emailAddress") or jira_email,
-                    "account_id": user_info.get("accountId"),
-                    "avatar_url": avatar_url,
-                    "time_zone": user_info.get("timeZone"),
-                    "account_type": user_info.get("accountType")
+                    "avatar": avatar_url,
+                    "account_id": user_info.get("accountId")
                 }
             else:
                 return {
                     "success": False,
-                    "error": f"Jira authentication returned HTTP {response.status_code}: {response.text[:200]}"
+                    "error": f"Authentication failed (HTTP {response.status_code}): {response.text[:200]}"
                 }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -136,7 +131,7 @@ class JiraTool:
                 "success": False,
                 "project": project_key,
                 "issues": [],
-                "error": "Jira credentials not configured",
+                "error": "Jira connector is not connected for this project.",
                 "metrics": {
                     "total_issues": 0,
                     "sprint_burndown": "Offline"
@@ -149,29 +144,31 @@ class JiraTool:
             auth = HTTPBasicAuth(jira_email, jira_token)
 
             # Discover projects in instance
-            clean_key = project_key.split('-')[0].strip() if project_key else ""
+            clean_key = project_key.split('-')[0].strip().upper() if project_key else ""
             p_res = requests.get(f"{base_url}/rest/api/3/project/search", headers=headers, auth=auth, timeout=10)
             
-            target_key = clean_key
+            target_key = None
             if p_res.status_code == 200:
-                available_keys = [p.get("key") for p in p_res.json().get("values", [])]
-                if available_keys:
-                    if clean_key in available_keys:
-                        target_key = clean_key
-                    elif "PSSM" in available_keys:
-                        target_key = "PSSM"
-                    else:
-                        target_key = available_keys[0]
+                available_projects = p_res.json().get("values", [])
+                available_keys = [p.get("key", "").upper() for p in available_projects]
+                if clean_key in available_keys:
+                    target_key = clean_key
+                else:
+                    # Match by full key or project name if possible
+                    for p in available_projects:
+                        if p.get("key", "").upper() == project_key.upper():
+                            target_key = p.get("key")
+                            break
 
             if not target_key:
                 return {
                     "success": True,
                     "project": project_key,
                     "issues": [],
-                    "metrics": {"total_issues": 0, "sprint_burndown": "No Projects"}
+                    "metrics": {"total_issues": 0, "sprint_burndown": "No Tickets"}
                 }
 
-            # Query real Jira issues
+            # Query real Jira issues strictly for this target project
             jql = f'project = "{target_key}"'
             if status != "all":
                 jql += f' AND status = "{status}"'
@@ -233,19 +230,23 @@ class JiraTool:
             }
 
     @staticmethod
-    def create_issue(project_key: str, summary: str, description: str = "", issue_type: str = "Task", priority: str = "Medium") -> Dict[str, Any]:
+    def create_issue(project_key: str, summary: str, description: str = "", issue_type: str = "Task", priority: str = "Medium", project_id=None, project_name=None) -> Dict[str, Any]:
         """
-        Creates a live issue directly in Jira Cloud via Atlassian REST API v3.
+        Creates a live issue directly in Jira Cloud.
+        If the project does not exist on Jira Cloud, dynamically creates the project on Jira first!
         """
+        import re
         import requests
         from requests.auth import HTTPBasicAuth
+        import db
+        from models.project import Project
         
-        jira_url, jira_email, jira_token = JiraTool.get_credentials()
+        jira_url, jira_email, jira_token = JiraTool.get_credentials(project_id=project_id)
         
         if not jira_url or not jira_email or not jira_token:
             return {
                 "success": False, 
-                "error": "Jira credentials not configured. Please set URL, Email, and API Token."
+                "error": "Jira Cloud is not connected for this project. Please configure credentials in Connectors Hub."
             }
 
         try:
@@ -256,36 +257,83 @@ class JiraTool:
                 "Content-Type": "application/json"
             }
             
-            clean_proj = project_key.split('-')[0].strip() if project_key else ""
+            clean_proj = project_key.split('-')[0].strip().upper() if project_key else ""
+            if not clean_proj:
+                clean_proj = "PRJ"
 
             # Check available projects in Jira instance
             search_proj_url = f"{base_url}/rest/api/3/project/search"
             proj_res = requests.get(search_proj_url, headers=headers, auth=auth, timeout=10)
             
-            target_key = clean_proj
+            target_key = None
+            existing_projects = []
             if proj_res.status_code == 200:
-                p_data = proj_res.json()
-                projs = p_data.get("values", [])
-                if projs:
-                    existing_keys = [p.get("key") for p in projs]
-                    if clean_proj in existing_keys:
-                        target_key = clean_proj
-                    elif "PSSM" in existing_keys and ("migration" in summary.lower() or "sap" in summary.lower() or "alpha" in summary.lower()):
-                        target_key = "PSSM"
-                    elif "PSSM" in existing_keys:
-                        target_key = "PSSM"
-                    else:
-                        target_key = existing_keys[0]
+                existing_projects = proj_res.json().get("values", [])
+                for p in existing_projects:
+                    pkey = p.get("key", "").upper()
+                    pname = p.get("name", "").lower()
+                    if clean_proj == pkey or (project_name and project_name.lower() == pname):
+                        target_key = pkey
+                        break
+
+            # If project does NOT exist in Jira Cloud, DYNAMICALLY CREATE IT ON THE FLY!
+            if not target_key:
+                logger.info(f"Project '{project_key}' does not exist on Jira Cloud. Dynamically creating it...")
+                # 1. Fetch current lead accountId
+                myself_res = requests.get(f"{base_url}/rest/api/3/myself", headers=headers, auth=auth, timeout=10)
+                lead_id = None
+                if myself_res.status_code == 200:
+                    lead_id = myself_res.json().get("accountId")
+
+                # 2. Sanitize project key (must be 2-10 uppercase letters)
+                candidate_key = re.sub(r'[^A-Z]', '', clean_proj)
+                if len(candidate_key) < 2 and project_name:
+                    words = project_name.split()
+                    candidate_key = ''.join([w[0].upper() for w in words if w])[:6]
+                if len(candidate_key) < 2:
+                    candidate_key = (candidate_key + "PRJ")[:4]
+
+                # Ensure uniqueness against existing keys
+                existing_keys = [p.get("key", "").upper() for p in existing_projects]
+                unique_key = candidate_key
+                counter = 1
+                while unique_key in existing_keys and counter < 100:
+                    unique_key = f"{candidate_key[:8]}{counter}"
+                    counter += 1
+
+                resolved_name = project_name or f"Project {unique_key}"
+                create_proj_payload = {
+                    "key": unique_key,
+                    "name": resolved_name,
+                    "projectTypeKey": "software",
+                    "projectTemplateKey": "com.pyxis.greenhopper.jira:gh-simplified-agility-scrum",
+                    "description": f"Managed via VPM Enterprise Governance Suite",
+                    "assigneeType": "PROJECT_LEAD"
+                }
+                if lead_id:
+                    create_proj_payload["leadAccountId"] = lead_id
+
+                new_proj_res = requests.post(f"{base_url}/rest/api/3/project", headers=headers, auth=auth, json=create_proj_payload, timeout=15)
+                if new_proj_res.status_code in (200, 201):
+                    new_proj_data = new_proj_res.json()
+                    target_key = new_proj_data.get("key") or unique_key
+                    logger.info(f"Successfully dynamically created Jira project: {target_key}")
+                    # Update local database project record with the established key
+                    if project_id and db.db_session:
+                        try:
+                            local_p = db.db_session.query(Project).filter_by(id=project_id).first()
+                            if local_p:
+                                local_p.jira_key = target_key
+                                db.db_session.commit()
+                        except Exception as update_err:
+                            logger.warning(f"Could not update local project jira_key: {update_err}")
                 else:
+                    err_txt = new_proj_res.text[:250]
+                    logger.error(f"Dynamic Jira project creation failed (HTTP {new_proj_res.status_code}): {err_txt}")
                     return {
                         "success": False,
-                        "error": "No projects exist on your Jira Cloud instance. Please create a project (e.g., PSSM or KAN) first."
+                        "error": f"Failed to dynamically create Jira project '{unique_key}' on Jira Cloud: {err_txt}"
                     }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to query Jira projects (HTTP {proj_res.status_code}): {proj_res.text[:200]}"
-                }
 
             # Map issue type: Bug for Critical / High, Task for others
             target_issue_type = "Bug" if priority in ("Critical", "High") or issue_type == "Bug" else "Task"
@@ -333,13 +381,14 @@ class JiraTool:
                     "key": issue_key,
                     "id": issue_id,
                     "url": f"{base_url}/browse/{issue_key}",
+                    "project_key": target_key,
                     "message": f"Successfully raised live Jira ticket {issue_key} in project {target_key}"
                 }
             else:
                 logger.error(f"Jira issue creation failed (HTTP {resp.status_code}): {resp.text[:300]}")
                 return {
                     "success": False,
-                    "error": f"Jira API rejected ticket creation (HTTP {resp.status_code}): {resp.text[:250]}"
+                    "error": f"Jira issue creation failed (HTTP {resp.status_code}): {resp.text[:250]}"
                 }
         except Exception as e:
             logger.error(f"Failed to create live Jira issue: {e}")

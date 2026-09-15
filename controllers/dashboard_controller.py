@@ -136,99 +136,6 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             gate_status = "Gate 1 Initialized"
             sla_adherence = 100.0
             audit_score = 100
-        elif p_key == 'CLOUD' and 'Migration' in p_name: # Demo Cloud project
-            total_hc = 24
-            fte_hc = 16
-            contractor_hc = 8
-            active_hc = 22
-            util_rate = 93.8
-            target_date = "November 20, 2026"
-            days_left = 69
-            spi = 1.04
-            sched_status = "On Track (+4 Days Ahead)"
-            completed_tasks = 58
-            in_prog_tasks = 16
-            review_tasks = 6
-            blocked_tasks = max(len(crit_ids), 1 if len(crit_ids) > 0 else 0)
-            total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-            architects = 3
-            engineers = 12
-            qa = 4
-            devops = 3
-            pms = 2
-            phases = [
-                {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Apr 15, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Jun 30, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sep 30, 2026", "status": "In Progress", "completion_pct": 78, "days_left": 18},
-                {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Oct 31, 2026", "status": "Pending", "completion_pct": 25, "days_left": 49},
-                {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": target_date, "status": "Scheduled", "completion_pct": 0, "days_left": days_left}
-            ]
-            curr_phase = "Phase 3: Integration & Security Compliance"
-            gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
-            sla_adherence = 94.8 if len(crit_ids) == 0 else 88.2
-            audit_score = 96 if len(crit_ids) == 0 else 84
-        elif p_key == 'PRJ' and 'Frontend' in p_name: # Demo Frontend project
-            total_hc = 18
-            fte_hc = 12
-            contractor_hc = 6
-            active_hc = 16
-            util_rate = 88.5
-            target_date = "October 30, 2026"
-            days_left = 48
-            spi = 0.97
-            sched_status = "Attention Required (-2 Days Delay)"
-            completed_tasks = 42
-            in_prog_tasks = 14
-            review_tasks = 4
-            blocked_tasks = max(len(crit_ids), 1 if len(crit_ids) > 0 else 0)
-            total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-            architects = 2
-            engineers = 9
-            qa = 3
-            devops = 2
-            pms = 2
-            phases = [
-                {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "May 15, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Aug 30, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Oct 15, 2026", "status": "In Progress", "completion_pct": 65, "days_left": 25},
-                {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Nov 15, 2026", "status": "Pending", "completion_pct": 15, "days_left": 55},
-                {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": target_date, "status": "Scheduled", "completion_pct": 0, "days_left": days_left}
-            ]
-            curr_phase = "Phase 3: Integration & Security Compliance"
-            gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
-            sla_adherence = 92.4
-            audit_score = 90
-        elif p_key == 'PSSM' and 'SAP' in p_name: # Demo SAP project
-            total_hc = 28
-            fte_hc = 18
-            contractor_hc = 10
-            active_hc = 26
-            util_rate = 94.2
-            target_date = "December 15, 2026"
-            days_left = 94
-            spi = 1.02
-            sched_status = "On Track (+1 Day Ahead)"
-            completed_tasks = 68
-            in_prog_tasks = 22
-            review_tasks = 8
-            blocked_tasks = max(len(crit_ids), 1 if len(crit_ids) > 0 else 0)
-            total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-            architects = 4
-            engineers = 14
-            qa = 5
-            devops = 3
-            pms = 2
-            phases = [
-                {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Apr 15, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Jun 30, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sep 30, 2026", "status": "In Progress", "completion_pct": 78, "days_left": 18},
-                {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Oct 31, 2026", "status": "Pending", "completion_pct": 25, "days_left": 49},
-                {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": target_date, "status": "Scheduled", "completion_pct": 0, "days_left": days_left}
-            ]
-            curr_phase = "Phase 3: Integration & Security Compliance"
-            gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
-            sla_adherence = 94.8 if len(crit_ids) == 0 else 88.2
-            audit_score = 96 if len(crit_ids) == 0 else 84
         else:
             doc_telemetry = extract_project_doc_telemetry(active_project.id)
             if doc_telemetry and doc_telemetry.get('team'):
@@ -644,24 +551,34 @@ def get_snapshot():
     if active_project:
         from models.uploaded_document import UploadedDocument
         doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=active_project.id).count() if db.db_session else 0
-        is_new_project = (doc_count == 0 and total_actual == 0 and len(all_risks) == 0)
+        is_new_project = (doc_count == 0 and len(all_risks) == 0)
 
-        pl_k = max(10, int(total_planned / 1000))
-        ac_k = int(total_actual / 1000)
-        snap_data["burndown"] = [
-            {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": ac_k if ac_k > 0 else 0},
-            {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": ac_k if ac_k > 0 else None},
-            {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": None},
-            {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": None},
-            {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": None},
-            {"sprint": "Sprint 6", "planned": pl_k, "actual": None}
-        ]
-        snap_data["financials"] = {
-            "totalBudget": total_planned,
-            "spent": total_actual,
-            "remaining": max(0, total_planned - total_actual),
-            "projectedVariance": tot_variance
-        }
+        if is_new_project:
+            snap_data["burndown"] = []
+            snap_data["milestones"] = []
+            snap_data["financials"] = {
+                "totalBudget": total_planned,
+                "spent": total_actual,
+                "remaining": max(0, total_planned - total_actual),
+                "projectedVariance": tot_variance
+            }
+        else:
+            pl_k = max(10, int(total_planned / 1000))
+            ac_k = int(total_actual / 1000)
+            snap_data["burndown"] = [
+                {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": ac_k if ac_k > 0 else 0},
+                {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": ac_k if ac_k > 0 else None},
+                {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": None},
+                {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": None},
+                {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": None},
+                {"sprint": "Sprint 6", "planned": pl_k, "actual": None}
+            ]
+            snap_data["financials"] = {
+                "totalBudget": total_planned,
+                "spent": total_actual,
+                "remaining": max(0, total_planned - total_actual),
+                "projectedVariance": tot_variance
+            }
 
     # Real-time risk distribution for heatmaps (PMO & Investor)
     crit_ids = [r.risk_id for r in all_risks if r.severity == "Critical" and r.status == "Open"]

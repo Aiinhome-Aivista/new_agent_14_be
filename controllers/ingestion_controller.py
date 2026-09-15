@@ -409,6 +409,29 @@ def ingest_connector_items():
         db.db_session.add(doc_record)
         ingested_count += 1
 
+        # If item indicates a critical/high delivery blocker or risk, persist into RiskRegister
+        if has_risk:
+            from models.risk_register import RiskRegister
+            clean_rid = f"R-{item_id}" if not item_id.startswith("R-") else item_id
+            existing_risk = db.db_session.query(RiskRegister).filter(
+                RiskRegister.project_id == project_id,
+                (RiskRegister.risk_id == clean_rid) | (RiskRegister.jira_issue_key == item_id)
+            ).first()
+            if not existing_risk:
+                new_r = RiskRegister(
+                    project_id=project_id,
+                    risk_id=clean_rid,
+                    title=title,
+                    description=desc,
+                    severity="Critical" if priority_val in ["Critical", "Blocker"] else "High",
+                    status="Open",
+                    owner=f"{prov_title} Synced",
+                    mitigation_plan=f"Ingested from live {prov_title} ticket {item_id}. Prioritize in sprint backlog.",
+                    jira_issue_key=item_id if provider == "jira" else None,
+                    created_at=datetime.now(timezone.utc)
+                )
+                db.db_session.add(new_r)
+
     db.db_session.commit()
 
     return jsonify({

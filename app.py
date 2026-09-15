@@ -27,6 +27,29 @@ def create_app():
     try:
         import db
         with db.engine.connect() as conn:
+            # Defensive cleanup: Ensure programs table, program_id, and bogus columns are never present
+            try:
+                conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+                conn.execute(text("DROP TABLE IF EXISTS programs"))
+                for col in ['program_id', 'project_code', 'project_leader', 'project_manager_id', 'start_date', 'end_date']:
+                    check_c = conn.execute(text(f"SHOW COLUMNS FROM projects LIKE '{col}'")).fetchone()
+                    if check_c:
+                        try:
+                            conn.execute(text(f"ALTER TABLE projects DROP COLUMN `{col}`"))
+                        except Exception:
+                            pass
+                check_snap_p = conn.execute(text("SHOW COLUMNS FROM dashboard_snapshots LIKE 'program_id'")).fetchone()
+                if check_snap_p:
+                    try:
+                        conn.execute(text("ALTER TABLE dashboard_snapshots DROP COLUMN program_id"))
+                    except Exception:
+                        pass
+                conn.execute(text("ALTER TABLE projects MODIFY COLUMN jira_key VARCHAR(50) NULL DEFAULT NULL"))
+                conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+                conn.commit()
+            except Exception:
+                pass
+
             # Check if description exists in projects table
             check_sql = text("SHOW COLUMNS FROM projects LIKE 'description'")
             res = conn.execute(check_sql).fetchone()

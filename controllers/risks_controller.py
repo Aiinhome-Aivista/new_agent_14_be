@@ -122,9 +122,23 @@ def push_risk_to_jira(risk_id):
         
     from tools.jira_tool import JiraTool
     from models.project import Project
+    from models.integration_setting import IntegrationSetting
+
+    # Strictly check that Jira connector is connected for this project
+    jira_setting = db.db_session.query(IntegrationSetting).filter_by(
+        provider='jira',
+        project_id=risk.project_id,
+        is_connected=True
+    ).first()
+    if not jira_setting or not jira_setting.base_url:
+        return jsonify({
+            "success": False,
+            "error": "Jira Cloud is not connected for this project. Please configure and connect Jira in Connectors Hub."
+        }), 400
     
     proj = db.db_session.query(Project).filter_by(id=risk.project_id).first()
-    jira_key = proj.jira_key if proj else "PRJ-101"
+    jira_key = proj.jira_key if proj else "PRJ"
+    proj_name = proj.name if proj else f"Project #{risk.project_id}"
     
     issue_type = "Bug" if risk.severity in ("Critical", "High") else "Task"
     
@@ -133,7 +147,9 @@ def push_risk_to_jira(risk_id):
         summary=f"[{risk.risk_id}] {risk.title}",
         description=f"{risk.description}\n\nMitigation Plan: {risk.mitigation_plan or 'Under PM review'}\nSeverity: {risk.severity}\nOwner: {risk.owner}",
         issue_type=issue_type,
-        priority=risk.severity
+        priority=risk.severity,
+        project_id=proj.id if proj else risk.project_id,
+        project_name=proj_name
     )
     
     if res.get("success"):

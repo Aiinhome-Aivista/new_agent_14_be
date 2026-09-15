@@ -10,7 +10,7 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-key')
 
     # Database
-    DB_HOST = os.getenv('DB_HOST', '72.61.226.68')
+    DB_HOST = os.getenv('DB_HOST', '187.127.163.17')
     DB_PORT = os.getenv('DB_PORT', '3306')
     DB_USER = os.getenv('DB_USER', 'aiinhome')
     DB_PASSWORD = os.getenv('DB_PASSWORD', 'Aiin@2026')

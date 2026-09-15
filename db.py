@@ -4,6 +4,7 @@ import pymysql
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from config import Config
 
 engine = None
 db_session = None
@@ -15,12 +16,12 @@ logging.getLogger('sqlalchemy.pool').setLevel(logging.ERROR)
 def init_db(app):
     global engine, db_session
     
-    db_uri = app.config['SQLALCHEMY_DATABASE_URI']
-    db_host = app.config.get('DB_HOST', '72.61.226.68')
-    db_port = int(app.config.get('DB_PORT', 3306))
-    db_user = app.config.get('DB_USER', 'aiinhome')
-    db_pass = app.config.get('DB_PASSWORD', 'Aiin@2026')
-    db_name = app.config.get('DB_NAME', 'vpm_db')
+    db_uri = app.config.get('SQLALCHEMY_DATABASE_URI', Config.SQLALCHEMY_DATABASE_URI)
+    db_host = app.config.get('DB_HOST', Config.DB_HOST)
+    db_port = int(app.config.get('DB_PORT', Config.DB_PORT))
+    db_user = app.config.get('DB_USER', Config.DB_USER)
+    db_pass = app.config.get('DB_PASSWORD', Config.DB_PASSWORD)
+    db_name = app.config.get('DB_NAME', Config.DB_NAME)
 
     def resilient_connection_creator():
         """Creates a PyMySQL connection with automatic retry logic against transient packet sequence drops."""

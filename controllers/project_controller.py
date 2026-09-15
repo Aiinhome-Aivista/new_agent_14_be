@@ -21,7 +21,15 @@ def list_projects():
     risk counts, and document counts for the Projects Hub.
     """
     try:
-        projects = db.db_session.query(Project).order_by(Project.id.asc()).all()
+        query = db.db_session.query(Project)
+        
+        user_role = request.user.get('role')
+        user_id = request.user.get('user_id')
+        
+        if user_role == 'Project Manager' and user_id:
+            query = query.filter(Project.project_manager_id == int(user_id))
+            
+        projects = query.order_by(Project.id.asc()).all()
         result = []
         
         for p in projects:
@@ -94,6 +102,12 @@ def create_project():
     description = (data.get('description') or '').strip()
     status = (data.get('status') or 'Active').strip()
     raw_budget = data.get('planned_spend', 1000000.0)
+    project_manager_id = data.get('project_manager_id')
+    if project_manager_id:
+        try:
+            project_manager_id = int(project_manager_id)
+        except ValueError:
+            project_manager_id = None
 
     if not name:
         return jsonify({'success': False, 'error': 'Project Name is required.'}), 400
@@ -128,6 +142,7 @@ def create_project():
             name=name,
             description=description,
             status=status,
+            project_manager_id=project_manager_id,
             created_at=datetime.now(timezone.utc)
         )
         db.db_session.add(new_project)
@@ -216,6 +231,16 @@ def update_project(project_id):
         project.description = data['description'].strip()
     if 'status' in data and data['status'].strip():
         project.status = data['status'].strip()
+
+    if 'project_manager_id' in data:
+        pm_id = data['project_manager_id']
+        if pm_id is not None:
+            try:
+                project.project_manager_id = int(pm_id)
+            except ValueError:
+                pass
+        else:
+            project.project_manager_id = None
 
     # Update or initialize budget planned_spend
     updated_plan = None

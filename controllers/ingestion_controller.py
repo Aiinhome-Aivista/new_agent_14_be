@@ -5,6 +5,72 @@ from services.auth_service import require_roles
 
 ingestion_bp = Blueprint('ingestion', __name__)
 
+@ingestion_bp.route('/check-accuracy', methods=['POST'])
+@require_roles('PMO', 'Project Manager', 'Program Director')
+def check_document_accuracy():
+    """
+    Evaluates uploaded document against target project's description & scope.
+    Returns match percentage, threshold from .env, matched aspects, and unmatched aspects.
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided for accuracy check"}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    raw_pid = request.form.get('project_id', '1')
+    try:
+        project_id = int(raw_pid)
+    except (ValueError, TypeError):
+        project_id = 1
+
+    # Temporarily save file to disk for parsing
+    temp_dir = os.path.join(os.getcwd(), 'uploads', 'temp_accuracy')
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, file.filename)
+    file.save(temp_path)
+
+    try:
+        from services.accuracy_service import DataAccuracyService
+        result = DataAccuracyService.evaluate_file(temp_path, project_id=project_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": f"Error checking accuracy: {str(e)}"}), 500
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@ingestion_bp.route('/check-connector-accuracy', methods=['POST'])
+@require_roles('PMO', 'Project Manager', 'Program Director')
+def check_connector_accuracy():
+    """
+    Evaluates batch of connector items against target project's description & scope.
+    """
+    data = request.json or {}
+    items = data.get('items', [])
+    raw_pid = data.get('project_id', 1)
+    provider = data.get('provider', 'connector')
+    try:
+        project_id = int(raw_pid)
+    except (ValueError, TypeError):
+        project_id = 1
+
+    if not items:
+        return jsonify({"error": "No items provided for accuracy check"}), 400
+
+    try:
+        from services.accuracy_service import DataAccuracyService
+        result = DataAccuracyService.evaluate_connector_items(items, project_id=project_id, provider=provider)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": f"Error checking connector accuracy: {str(e)}"}), 500
+
+
 @ingestion_bp.route('/upload', methods=['POST'])
 @require_roles('PMO', 'Project Manager')
 def upload_file():
@@ -77,6 +143,18 @@ def upload_file():
             except Exception:
                 valid_pid = None
 
+        raw_acc = request.form.get('accuracy_score')
+        accuracy_score = 90
+        if raw_acc and str(raw_acc).isdigit():
+            accuracy_score = int(raw_acc)
+        else:
+            try:
+                from services.accuracy_service import DataAccuracyService
+                eval_res = DataAccuracyService.evaluate_file(file_path, project_id=valid_pid or 1)
+                accuracy_score = eval_res.get('match_percentage', 90)
+            except Exception:
+                accuracy_score = 90
+
         doc_record = UploadedDocument(
             filename=file.filename,
             file_type=ext,
@@ -87,6 +165,7 @@ def upload_file():
             project_id=valid_pid,
             status="Indexed in Vector Memory",
             risks_detected=risks_detected,
+            accuracy_score=accuracy_score,
             created_at=datetime.now(timezone.utc)
         )
         db.db_session.add(doc_record)
@@ -404,6 +483,7 @@ def ingest_connector_items():
             project_id=project_id,
             status="Indexed in Vector Memory",
             risks_detected=has_risk,
+            accuracy_score=int(item.get("accuracy_score") or 90),
             created_at=datetime.now(timezone.utc)
         )
         db.db_session.add(doc_record)

@@ -15,6 +15,7 @@ class UploadedDocument(Base):
     project_id = Column(Integer, ForeignKey('projects.id'), nullable=True)
     status = Column(String(50), default="Indexed in Vector Memory")
     risks_detected = Column(Integer, default=0)
+    accuracy_score = Column(Integer, default=90)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
@@ -29,6 +30,7 @@ class UploadedDocument(Base):
             'project_id': self.project_id,
             'status': self.status,
             'risks_detected': self.risks_detected,
+            'accuracy_score': self.accuracy_score if self.accuracy_score is not None else 90,
             'uploaded_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'indexed': True
         }

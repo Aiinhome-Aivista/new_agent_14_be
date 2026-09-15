@@ -32,3 +32,10 @@ class Config:
     JIRA_URL = os.getenv('JIRA_BASE_URL') or os.getenv('JIRA_URL')
     JIRA_EMAIL = os.getenv('JIRA_EMAIL') or os.getenv('JIRA_USER_EMAIL') or os.getenv('JIRA_USERNAME')
     JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN') or os.getenv('JIRA_TOKEN')
+
+    # Data Ingestion Quality & Accuracy Threshold (0-100)
+    DATA_ACCURACY_THRESHOLD = int(os.getenv('DATA_ACCURACY_THRESHOLD', '70'))
+
+    # Remote LLM Generation Timeout (seconds)
+    LLM_TIMEOUT = int(os.getenv('LLM_TIMEOUT', '120'))
+

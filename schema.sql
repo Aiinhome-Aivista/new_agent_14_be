@@ -85,9 +85,11 @@ CREATE TABLE projects (
 	name VARCHAR(255) NOT NULL, 
 	description TEXT,
 	status VARCHAR(50) DEFAULT 'Active', 
+	project_manager_id INTEGER NULL,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP, 
 	PRIMARY KEY (id), 
-	UNIQUE (jira_key)
+	UNIQUE (jira_key),
+	FOREIGN KEY (project_manager_id) REFERENCES users(id)
 )
 
 ;

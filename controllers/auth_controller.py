@@ -5,6 +5,18 @@ from models.user import User
 
 auth_bp = Blueprint('auth', __name__)
 
+@auth_bp.route('/users', methods=['GET'])
+def get_users():
+    role = request.args.get('role')
+    query = db.db_session.query(User)
+    if role:
+        query = query.filter_by(role=role)
+    users = query.all()
+    return jsonify({
+        "success": True,
+        "users": [u.to_dict() for u in users]
+    })
+
 @auth_bp.route('/register', methods=['POST'])
 def register():
     data = request.json

@@ -13,6 +13,7 @@ from controllers.settings_controller import settings_bp
 from controllers.guardrails_controller import guardrails_bp
 from controllers.knowledge_controller import knowledge_bp
 from controllers.project_controller import project_bp
+from controllers.stakeholder_controller import stakeholder_bp
 
 def create_app():
     app = Flask(__name__)
@@ -33,6 +34,7 @@ def create_app():
     app.register_blueprint(settings_bp, url_prefix='/api/settings')
     app.register_blueprint(guardrails_bp, url_prefix='/api/guardrails')
     app.register_blueprint(knowledge_bp, url_prefix='/api/knowledge')
+    app.register_blueprint(stakeholder_bp, url_prefix='/api/stakeholders')
 
     @app.route('/health', methods=['GET'])
     def health_check():

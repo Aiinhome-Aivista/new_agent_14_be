@@ -390,6 +390,7 @@ class JiraTool:
 
             projects_data = response.json().get("values", [])
             synced_projects = 0
+            synced_programs = 0
 
             for proj in projects_data:
                 proj_name = proj.get("name")

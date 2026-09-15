@@ -129,7 +129,7 @@ class IntakeAgent:
             # Simple heuristic extraction from text
             budget_matches = re.findall(r'\$?([\d,]+(?:\.\d+)?)\s*(?:M|k|million|thousand)?', document_text, re.IGNORECASE)
             planned = 1500000.0
-            actual = 1200000.0
+            actual = 0.0
             
             detected_risks = []
             if "risk" in document_text.lower() or "delay" in document_text.lower():
@@ -159,9 +159,19 @@ class IntakeAgent:
                             "slaStatus": "Compliant" if m_count != 3 else "Breached"
                         })
                 
+            from models.project import Project
+            p_obj = None
+            try:
+                import db
+                p_obj = db.db_session.query(Project).filter_by(id=project_id).first() if db.db_session else None
+            except Exception:
+                pass
+            p_name = p_obj.name if p_obj else (clean_title or f"Project {project_id}")
+            p_key = p_obj.jira_key if p_obj else f"PRJ-{project_id}"
+
             return {
-                "project_name": "Alpha Migration Program",
-                "jira_key": "PRJ-101",
+                "project_name": p_name,
+                "jira_key": p_key,
                 "status": "Active",
                 "risks": detected_risks,
                 "milestones": detected_milestones,

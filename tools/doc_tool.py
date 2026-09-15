@@ -51,7 +51,24 @@ class DocTool:
     @staticmethod
     def _parse_docx(file_path: str) -> str:
         doc = docx.Document(file_path)
-        return "\n".join([para.text for para in doc.paragraphs])
+        content_parts = []
+
+        for para in doc.paragraphs:
+            if para.text.strip():
+                content_parts.append(para.text.strip())
+
+        # Also extract all tables (e.g. Project Details, Team, Milestones, Risk Register)
+        for t_idx, table in enumerate(doc.tables):
+            table_lines = []
+            for row in table.rows:
+                row_cells = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
+                # Filter out empty or duplicate merged cells
+                if any(row_cells):
+                    table_lines.append(" | ".join(row_cells))
+            if table_lines:
+                content_parts.append(f"\n[TABLE_{t_idx + 1}]\n" + "\n".join(table_lines) + f"\n[/TABLE_{t_idx + 1}]\n")
+
+        return "\n".join(content_parts)
 
     @staticmethod
     def _parse_excel(file_path: str) -> str:

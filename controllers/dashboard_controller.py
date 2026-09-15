@@ -9,6 +9,80 @@ from controllers.risks_controller import enrich_risk_dict
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
+def extract_project_doc_telemetry(project_id):
+    """
+    Extracts high-fidelity project telemetry (team members, roles, milestones, deliverables)
+    directly from the project's uploaded SOW / Charter document tables if present.
+    """
+    import os
+    from docx import Document
+    from models.uploaded_document import UploadedDocument
+    
+    docs = db.db_session.query(UploadedDocument).filter_by(project_id=project_id).all() if db.db_session else []
+    candidate_paths = []
+    for d in docs:
+        if d.filename:
+            p1 = os.path.join('uploads', d.filename)
+            p2 = os.path.join('..', d.filename)
+            if os.path.exists(p1) and p1.lower().endswith('.docx'):
+                candidate_paths.append(p1)
+            elif os.path.exists(p2) and p2.lower().endswith('.docx'):
+                candidate_paths.append(p2)
+                
+    if not candidate_paths:
+        return None
+        
+    doc_path = candidate_paths[0]
+    try:
+        doc = Document(doc_path)
+        team = []
+        milestones = []
+        for table in doc.tables:
+            if not table.rows:
+                continue
+            headers = [c.text.strip().lower() for c in table.rows[0].cells]
+            # Identify Team Ownership Table (avoiding sign-off tables with 'signature')
+            if 'name' in headers and 'role' in headers and 'signature' not in headers:
+                name_idx = headers.index('name')
+                role_idx = headers.index('role')
+                contact_idx = headers.index('contact') if 'contact' in headers else -1
+                for row in table.rows[1:]:
+                    cells = [c.text.strip() for c in row.cells]
+                    if len(cells) > max(name_idx, role_idx) and cells[name_idx]:
+                        team.append({
+                            'name': cells[name_idx],
+                            'role': cells[role_idx],
+                            'contact': cells[contact_idx] if contact_idx >= 0 and len(cells) > contact_idx else ''
+                        })
+            # Identify Milestones & Deliverables Table
+            elif 'milestone' in headers:
+                m_idx = headers.index('milestone')
+                desc_idx = headers.index('description') if 'description' in headers else -1
+                target_idx = headers.index('target date') if 'target date' in headers else -1
+                stat_idx = headers.index('status') if 'status' in headers else -1
+                for row in table.rows[1:]:
+                    cells = [c.text.strip() for c in row.cells]
+                    if len(cells) > m_idx and cells[m_idx]:
+                        m_id = cells[m_idx]
+                        m_desc = cells[desc_idx] if desc_idx >= 0 and len(cells) > desc_idx else ''
+                        m_target = cells[target_idx] if target_idx >= 0 and len(cells) > target_idx else 'TBD'
+                        m_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else 'Pending'
+                        
+                        comp_pct = 100 if m_stat.lower() in ('done', 'completed') else (50 if m_stat.lower() in ('in progress', 'on track') else (20 if 'risk' in m_stat.lower() else 0))
+                        milestones.append({
+                            'id': m_id,
+                            'name': f"{m_id}: {m_desc}" if m_desc else m_id,
+                            'target_date': m_target,
+                            'status': m_stat,
+                            'completion_pct': comp_pct,
+                            'days_left': 0 if comp_pct == 100 else 45
+                        })
+        if team or milestones:
+            return {'team': team, 'milestones': milestones, 'doc_path': doc_path}
+    except Exception as e:
+        print(f"[extract_project_doc_telemetry] Error extracting doc telemetry: {e}")
+    return None
+
 def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, tot_variance, burn_pct, crit_ids, high_ids):
     """
     Synthesizes rich, executive PMO metrics:
@@ -156,37 +230,88 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             sla_adherence = 94.8 if len(crit_ids) == 0 else 88.2
             audit_score = 96 if len(crit_ids) == 0 else 84
         else:
-            # Calibrated based on actual activity
-            total_hc = max(4, int(total_planned / 120000)) if total_actual > 0 else 0
-            fte_hc = int(total_hc * 0.65) if total_hc > 0 else 0
-            contractor_hc = total_hc - fte_hc
-            active_hc = max(0, total_hc - 1) if total_hc > 0 else 0
-            util_rate = 85.0 if total_hc > 0 else 0.0
-            target_date = "November 28, 2026" if total_actual > 0 else "Pending Baseline"
-            days_left = 77 if total_actual > 0 else 0
-            spi = 1.00
-            sched_status = "Active & Governed" if total_actual > 0 else "Workspace Initialized"
-            completed_tasks = max(0, int(total_actual / 25000))
-            in_prog_tasks = max(0, int((total_planned - total_actual) / 80000)) if total_actual > 0 else 0
-            review_tasks = 2 if in_prog_tasks > 4 else 0
-            blocked_tasks = max(len(crit_ids), 0)
-            total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-            architects = max(1, int(total_hc * 0.15)) if total_hc > 0 else 0
-            engineers = max(2, int(total_hc * 0.50)) if total_hc > 0 else 0
-            qa = max(1, int(total_hc * 0.20)) if total_hc > 0 else 0
-            devops = max(1, int(total_hc * 0.15)) if total_hc > 0 else 0
-            pms = max(0, total_hc - (architects + engineers + qa + devops))
-            phases = [
-                {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Sprint 1", "status": "Completed" if total_actual > 0 else "Scheduled", "completion_pct": 100 if total_actual > 0 else 0, "days_left": 0},
-                {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Sprint 2-3", "status": "In Progress" if total_actual > 0 else "Scheduled", "completion_pct": 40 if total_actual > 0 else 0, "days_left": 30},
-                {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sprint 4", "status": "Scheduled", "completion_pct": 0, "days_left": 60},
-                {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Sprint 5", "status": "Scheduled", "completion_pct": 0, "days_left": 90},
-                {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": "Sprint 6", "status": "Scheduled", "completion_pct": 0, "days_left": 120}
-            ]
-            curr_phase = "Phase 1: Project Setup" if total_actual == 0 else "Phase 2: Development"
-            gate_status = "Gate 1 Initialized" if total_actual == 0 else ("Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold")
-            sla_adherence = 100.0 if total_actual == 0 else (94.8 if len(crit_ids) == 0 else 88.2)
-            audit_score = 100 if total_actual == 0 else (96 if len(crit_ids) == 0 else 84)
+            doc_telemetry = extract_project_doc_telemetry(active_project.id)
+            if doc_telemetry and doc_telemetry.get('team'):
+                team_list = doc_telemetry['team']
+                total_hc = len(team_list)
+                fte_hc = total_hc
+                contractor_hc = 0
+                active_hc = total_hc
+                util_rate = 94.0
+                target_date = "November 28, 2026"
+                days_left = 75
+                spi = 1.00
+                sched_status = "Governed by Project Charter & SOW"
+                
+                # Dynamic count of roles
+                architects = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['architect', 'lead'])]))
+                qa = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['qa', 'test'])]))
+                devops = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['devops', 'infra'])]))
+                pms = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['manager', 'pm'])]))
+                engineers = max(1, total_hc - (architects + qa + devops + pms))
+                if engineers <= 0:
+                    engineers = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['engineer', 'dev', 'safety'])]))
+                
+                if doc_telemetry.get('milestones'):
+                    phases = doc_telemetry['milestones']
+                    completed_milestones = len([m for m in phases if m.get('completion_pct', 0) == 100])
+                    in_prog_milestones = len([m for m in phases if 0 < m.get('completion_pct', 0) < 100])
+                    completed_tasks = completed_milestones * 6 + 4
+                    in_prog_tasks = in_prog_milestones * 5 + 3
+                    review_tasks = 2
+                    blocked_tasks = max(len(crit_ids), 0)
+                    total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
+                    curr_phase = f"Active Milestone: {phases[min(completed_milestones, len(phases)-1)]['id']}" if completed_milestones < len(phases) else "Milestone Execution"
+                else:
+                    phases = [
+                        {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Sprint 1", "status": "Completed" if total_actual > 0 else "Scheduled", "completion_pct": 100 if total_actual > 0 else 0, "days_left": 0},
+                        {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Sprint 2-3", "status": "In Progress" if total_actual > 0 else "Scheduled", "completion_pct": 40 if total_actual > 0 else 0, "days_left": 30},
+                        {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sprint 4", "status": "Scheduled", "completion_pct": 0, "days_left": 60},
+                        {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Sprint 5", "status": "Scheduled", "completion_pct": 0, "days_left": 90},
+                        {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": "Sprint 6", "status": "Scheduled", "completion_pct": 0, "days_left": 120}
+                    ]
+                    curr_phase = "Phase 1: Project Setup" if total_actual == 0 else "Phase 2: Development"
+                    completed_tasks = max(0, int(total_actual / 25000))
+                    in_prog_tasks = max(0, int((total_planned - total_actual) / 80000)) if total_actual > 0 else 0
+                    review_tasks = 2 if in_prog_tasks > 4 else 0
+                    blocked_tasks = max(len(crit_ids), 0)
+                    total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
+
+                gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
+                sla_adherence = 100.0 if total_actual == 0 else (94.8 if len(crit_ids) == 0 else 88.2)
+                audit_score = 100 if total_actual == 0 else (96 if len(crit_ids) == 0 else 84)
+            else:
+                # Calibrated based on actual activity
+                total_hc = max(4, int(total_planned / 120000)) if total_actual > 0 else 0
+                fte_hc = int(total_hc * 0.65) if total_hc > 0 else 0
+                contractor_hc = total_hc - fte_hc
+                active_hc = max(0, total_hc - 1) if total_hc > 0 else 0
+                util_rate = 85.0 if total_hc > 0 else 0.0
+                target_date = "November 28, 2026" if total_actual > 0 else "Pending Baseline"
+                days_left = 77 if total_actual > 0 else 0
+                spi = 1.00
+                sched_status = "Active & Governed" if total_actual > 0 else "Workspace Initialized"
+                completed_tasks = max(0, int(total_actual / 25000))
+                in_prog_tasks = max(0, int((total_planned - total_actual) / 80000)) if total_actual > 0 else 0
+                review_tasks = 2 if in_prog_tasks > 4 else 0
+                blocked_tasks = max(len(crit_ids), 0)
+                total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
+                architects = max(1, int(total_hc * 0.15)) if total_hc > 0 else 0
+                engineers = max(2, int(total_hc * 0.50)) if total_hc > 0 else 0
+                qa = max(1, int(total_hc * 0.20)) if total_hc > 0 else 0
+                devops = max(1, int(total_hc * 0.15)) if total_hc > 0 else 0
+                pms = max(0, total_hc - (architects + engineers + qa + devops))
+                phases = [
+                    {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Sprint 1", "status": "Completed" if total_actual > 0 else "Scheduled", "completion_pct": 100 if total_actual > 0 else 0, "days_left": 0},
+                    {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Sprint 2-3", "status": "In Progress" if total_actual > 0 else "Scheduled", "completion_pct": 40 if total_actual > 0 else 0, "days_left": 30},
+                    {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sprint 4", "status": "Scheduled", "completion_pct": 0, "days_left": 60},
+                    {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Sprint 5", "status": "Scheduled", "completion_pct": 0, "days_left": 90},
+                    {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": "Sprint 6", "status": "Scheduled", "completion_pct": 0, "days_left": 120}
+                ]
+                curr_phase = "Phase 1: Project Setup" if total_actual == 0 else "Phase 2: Development"
+                gate_status = "Gate 1 Initialized" if total_actual == 0 else ("Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold")
+                sla_adherence = 100.0 if total_actual == 0 else (94.8 if len(crit_ids) == 0 else 88.2)
+                audit_score = 100 if total_actual == 0 else (96 if len(crit_ids) == 0 else 84)
 
     else:
         # Cross-Project Portfolio Mode
@@ -269,11 +394,16 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             {"role": "Scrum Masters & PMO Coordinators", "count": pms, "allocation_pct": round((pms / total_hc) * 100, 1), "color": "#F59E0B"}
         ]
 
-        vendors_list = [
-            {"name": "PwC Internal Enterprise Staff", "headcount": fte_hc, "type": "Internal FTE", "share": f"{round(fte_hc / total_hc * 100)}%", "sla": "98.5%"},
-            {"name": "Cognizant / Infosys (System Integration)", "headcount": max(4, int(contractor_hc * 0.7)), "type": "Vendor Contractor", "share": f"{round(int(contractor_hc * 0.7) / total_hc * 100)}%", "sla": "93.4%"},
-            {"name": "Cloud Infrastructure Specialists (AWS/Azure)", "headcount": max(2, contractor_hc - int(contractor_hc * 0.7)), "type": "Specialist Contractor", "share": f"{round((contractor_hc - int(contractor_hc * 0.7)) / total_hc * 100)}%", "sla": "96.0%"}
-        ]
+        if contractor_hc > 0:
+            vendors_list = [
+                {"name": "PwC Internal Enterprise Staff", "headcount": fte_hc, "type": "Internal FTE", "share": f"{round(fte_hc / total_hc * 100)}%", "sla": "98.5%"},
+                {"name": "Cognizant / Infosys (System Integration)", "headcount": max(1, int(contractor_hc * 0.7)), "type": "Vendor Contractor", "share": f"{round(int(contractor_hc * 0.7) / total_hc * 100)}%", "sla": "93.4%"},
+                {"name": "Cloud Infrastructure Specialists (AWS/Azure)", "headcount": max(1, contractor_hc - int(contractor_hc * 0.7)), "type": "Specialist Contractor", "share": f"{round((contractor_hc - int(contractor_hc * 0.7)) / total_hc * 100)}%", "sla": "96.0%"}
+            ]
+        else:
+            vendors_list = [
+                {"name": "Internal Platform Engineering Pod", "headcount": fte_hc, "type": "Internal FTE", "share": "100%", "sla": "98.5%"}
+            ]
     else:
         roles_list = []
         vendors_list = []
@@ -341,7 +471,8 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             "contractor": contractor_hc,
             "utilization_rate": util_rate,
             "roles": roles_list,
-            "vendors": vendors_list
+            "vendors": vendors_list,
+            "members": team_list if ('team_list' in locals() and team_list) else []
         },
         "budget": {
             "total_planned": total_planned,
@@ -463,9 +594,19 @@ def get_snapshot():
             RiskRegister.severity.in_(["Critical", "High"])
         ).order_by(RiskRegister.id.asc()).all()
 
-    # Budget burn & variance calculations
-    total_planned = sum([float(b.planned_spend) for b in all_budgets]) if all_budgets else (1000000.0 if active_project else 0.0)
-    total_actual = sum([float(b.actual_spend) for b in all_budgets]) if all_budgets else 0.0
+    # Budget burn & variance calculations (baseline per active project or latest per distinct project)
+    if active_project:
+        latest_b = db.db_session.query(Budget).filter_by(project_id=active_project.id).order_by(Budget.created_at.desc()).first()
+        total_planned = float(latest_b.planned_spend) if latest_b else 1500000.0
+        total_actual = float(latest_b.actual_spend) if latest_b else 0.0
+    else:
+        total_planned = 0.0
+        total_actual = 0.0
+        for p in all_projs:
+            p_b = db.db_session.query(Budget).filter_by(project_id=p.id).order_by(Budget.created_at.desc()).first()
+            if p_b:
+                total_planned += float(p_b.planned_spend or 0.0)
+                total_actual += float(p_b.actual_spend or 0.0)
     tot_variance = total_planned - total_actual
     burn_pct = round((total_actual / total_planned * 100)) if total_planned > 0 else 0
 

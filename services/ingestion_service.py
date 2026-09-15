@@ -47,12 +47,14 @@ class IngestionService:
             intake_out = inputs.get("intake", {})
             b_rec = db.db_session.query(Budget).filter_by(project_id=project_id).first()
             def_planned = float(b_rec.planned_spend) if b_rec else 1500000.0
-            def_actual = float(b_rec.actual_spend) if b_rec else 1200000.0
+            def_actual = float(b_rec.actual_spend) if b_rec else 0.0
+            in_pl = intake_out.get("budget_planned")
+            in_ac = intake_out.get("budget_actual")
             return fin_agent.execute({
                 "project_id": project_id,
                 "period": "Current",
-                "budget_planned": float(intake_out.get("budget_planned", def_planned) or def_planned),
-                "budget_actual": float(intake_out.get("budget_actual", def_actual) or def_actual)
+                "budget_planned": float(in_pl) if in_pl is not None else def_planned,
+                "budget_actual": float(in_ac) if in_ac is not None else def_actual
             })
             
         def risk_wrapper(inputs):

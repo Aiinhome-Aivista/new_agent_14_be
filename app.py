@@ -13,7 +13,6 @@ from controllers.settings_controller import settings_bp
 from controllers.guardrails_controller import guardrails_bp
 from controllers.knowledge_controller import knowledge_bp
 from controllers.project_controller import project_bp
-from sqlalchemy import text
 
 def create_app():
     app = Flask(__name__)
@@ -22,84 +21,6 @@ def create_app():
 
     # Initialize Database
     init_db(app)
-
-    # Auto-migrate missing columns if necessary
-    try:
-        import db
-        with db.engine.connect() as conn:
-            # Defensive cleanup: Ensure programs table, program_id, and bogus columns are never present
-            try:
-                conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
-                conn.execute(text("DROP TABLE IF EXISTS programs"))
-                for col in ['program_id', 'project_code', 'project_leader', 'project_manager_id', 'start_date', 'end_date']:
-                    check_c = conn.execute(text(f"SHOW COLUMNS FROM projects LIKE '{col}'")).fetchone()
-                    if check_c:
-                        try:
-                            conn.execute(text(f"ALTER TABLE projects DROP COLUMN `{col}`"))
-                        except Exception:
-                            pass
-                check_snap_p = conn.execute(text("SHOW COLUMNS FROM dashboard_snapshots LIKE 'program_id'")).fetchone()
-                if check_snap_p:
-                    try:
-                        conn.execute(text("ALTER TABLE dashboard_snapshots DROP COLUMN program_id"))
-                    except Exception:
-                        pass
-                conn.execute(text("ALTER TABLE projects MODIFY COLUMN jira_key VARCHAR(50) NULL DEFAULT NULL"))
-                conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
-                conn.commit()
-            except Exception:
-                pass
-
-            # Check if description exists in projects table
-            check_sql = text("SHOW COLUMNS FROM projects LIKE 'description'")
-            res = conn.execute(check_sql).fetchone()
-            if not res:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN description TEXT NULL AFTER name"))
-                conn.commit()
-
-            # Check if project_id exists in integration_settings table
-            check_int_sql = text("SHOW COLUMNS FROM integration_settings LIKE 'project_id'")
-            int_res = conn.execute(check_int_sql).fetchone()
-            if not int_res:
-                conn.execute(text("ALTER TABLE integration_settings ADD COLUMN project_id INT NULL AFTER id"))
-                conn.execute(text("UPDATE integration_settings SET project_id = 1 WHERE project_id IS NULL"))
-                conn.commit()
-
-            # Check if old single provider index needs to be upgraded to composite (project_id, provider)
-            idx_sql = text("SHOW INDEX FROM integration_settings WHERE Key_name = 'provider'")
-            idx_res = conn.execute(idx_sql).fetchone()
-            if idx_res:
-                try:
-                    conn.execute(text("ALTER TABLE integration_settings DROP INDEX provider"))
-                    conn.commit()
-                except Exception:
-                    pass
-
-            uq_sql = text("SHOW INDEX FROM integration_settings WHERE Key_name = 'uq_project_provider'")
-            uq_res = conn.execute(uq_sql).fetchone()
-            if not uq_res:
-                try:
-                    conn.execute(text("ALTER TABLE integration_settings ADD UNIQUE KEY uq_project_provider (project_id, provider)"))
-                    conn.commit()
-                except Exception:
-                    pass
-
-            # Check if project_id exists in guardrail_policies table
-            check_gp_sql = text("SHOW COLUMNS FROM guardrail_policies LIKE 'project_id'")
-            gp_res = conn.execute(check_gp_sql).fetchone()
-            if not gp_res:
-                try:
-                    conn.execute(text("ALTER TABLE guardrail_policies ADD COLUMN project_id INT NULL AFTER id"))
-                    conn.commit()
-                except Exception:
-                    pass
-                try:
-                    conn.execute(text("ALTER TABLE guardrail_policies ADD CONSTRAINT fk_guardrail_project FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE"))
-                    conn.commit()
-                except Exception:
-                    pass
-    except Exception as col_err:
-        pass
 
     # Register Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')

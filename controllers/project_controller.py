@@ -90,7 +90,7 @@ def create_project():
     """
     data = request.json or {}
     name = (data.get('name') or '').strip()
-    jira_key = (data.get('jira_key') or '').strip().upper()
+    jira_key = (data.get('jira_key') or data.get('project_code') or '').strip().upper()
     description = (data.get('description') or '').strip()
     status = (data.get('status') or 'Active').strip()
     raw_budget = data.get('planned_spend', 1000000.0)
@@ -98,8 +98,13 @@ def create_project():
     if not name:
         return jsonify({'success': False, 'error': 'Project Name is required.'}), 400
 
-    # Auto-generate unique project key if not explicitly supplied
-    if not jira_key:
+    # Project Code: If user provided, check uniqueness; if empty, auto-generate cleanly
+    if jira_key:
+        existing = db.db_session.query(Project).filter_by(jira_key=jira_key).first()
+        if existing:
+            return jsonify({'success': False, 'error': f"Project code '{jira_key}' already exists. Please choose a distinct code or leave blank to auto-generate."}), 400
+    else:
+        # Auto-generate unique project code based on name initials
         words = [w for w in name.split() if w.isalnum()]
         prefix = "".join(w[0].upper() for w in words[:4]) if words else "PRJ"
         if len(prefix) < 2:
@@ -110,11 +115,6 @@ def create_project():
             candidate = f"{prefix}-{counter}"
             counter += 1
         jira_key = candidate
-    else:
-        # Ensure provided Jira Key doesn't conflict
-        existing = db.db_session.query(Project).filter_by(jira_key=jira_key).first()
-        if existing:
-            return jsonify({'success': False, 'error': f"Project key '{jira_key}' already exists. Please choose a distinct key."}), 400
 
     try:
         try:

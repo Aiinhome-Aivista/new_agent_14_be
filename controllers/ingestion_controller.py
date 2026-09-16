@@ -71,6 +71,88 @@ def check_connector_accuracy():
         return jsonify({"error": f"Error checking connector accuracy: {str(e)}"}), 500
 
 
+def sync_uploaded_doc_telemetry(file_path, project_id):
+    """
+    Parses structured team ownership or milestone tables from the uploaded doc
+    and persists them permanently into the MySQL database (project_members, project_milestones).
+    """
+    if not file_path or not project_id or not os.path.exists(file_path):
+        return
+    if not file_path.lower().endswith('.docx'):
+        return
+
+    try:
+        import db
+        from docx import Document
+        from models.project_member import ProjectMember
+        from models.project_milestone import ProjectMilestone
+
+        doc = Document(file_path)
+        for table in doc.tables:
+            if not table.rows:
+                continue
+            headers = [c.text.strip().lower() for c in table.rows[0].cells]
+            if 'name' in headers and 'role' in headers and 'signature' not in headers:
+                name_idx = headers.index('name')
+                role_idx = headers.index('role')
+                contact_idx = headers.index('contact') if 'contact' in headers else -1
+                for row in table.rows[1:]:
+                    cells = [c.text.strip() for c in row.cells]
+                    if len(cells) > max(name_idx, role_idx) and cells[name_idx]:
+                        m_name = cells[name_idx]
+                        m_role = cells[role_idx]
+                        m_contact = cells[contact_idx] if contact_idx >= 0 and len(cells) > contact_idx else ''
+                        existing = db.db_session.query(ProjectMember).filter_by(project_id=project_id, name=m_name).first()
+                        if existing:
+                            existing.role = m_role
+                            existing.contact = m_contact
+                        else:
+                            new_m = ProjectMember(
+                                project_id=project_id,
+                                name=m_name,
+                                role=m_role,
+                                contact=m_contact,
+                                member_type='Internal FTE',
+                                allocation_pct=100.0,
+                                is_active_today=True
+                            )
+                            db.db_session.add(new_m)
+            elif 'milestone' in headers:
+                m_idx = headers.index('milestone')
+                desc_idx = headers.index('description') if 'description' in headers else -1
+                target_idx = headers.index('target date') if 'target date' in headers else -1
+                stat_idx = headers.index('status') if 'status' in headers else -1
+                for row in table.rows[1:]:
+                    cells = [c.text.strip() for c in row.cells]
+                    if len(cells) > m_idx and cells[m_idx]:
+                        m_code = cells[m_idx]
+                        m_desc = cells[desc_idx] if desc_idx >= 0 and len(cells) > desc_idx else ''
+                        m_target = cells[target_idx] if target_idx >= 0 and len(cells) > target_idx else 'TBD'
+                        m_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else 'Pending'
+                        comp_pct = 100 if m_stat.lower() in ('done', 'completed') else (50 if m_stat.lower() in ('in progress', 'on track') else (20 if 'risk' in m_stat.lower() else 0))
+                        existing_ms = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id, milestone_code=m_code).first()
+                        if existing_ms:
+                            existing_ms.name = f"{m_code}: {m_desc}" if m_desc else m_code
+                            existing_ms.description = m_desc
+                            existing_ms.target_date = m_target
+                            existing_ms.status = m_stat
+                            existing_ms.completion_pct = comp_pct
+                        else:
+                            new_ms = ProjectMilestone(
+                                project_id=project_id,
+                                milestone_code=m_code,
+                                name=f"{m_code}: {m_desc}" if m_desc else m_code,
+                                description=m_desc,
+                                target_date=m_target,
+                                status=m_stat,
+                                completion_pct=comp_pct,
+                                days_left=0 if comp_pct == 100 else 45
+                            )
+                            db.db_session.add(new_ms)
+        db.db_session.commit()
+    except Exception as e:
+        print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
+
 @ingestion_bp.route('/upload', methods=['POST'])
 @require_roles('PMO', 'Project Manager')
 def upload_file():
@@ -170,6 +252,9 @@ def upload_file():
         )
         db.db_session.add(doc_record)
         db.db_session.commit()
+
+        # Persist extracted team members and milestones permanently into MySQL
+        sync_uploaded_doc_telemetry(file_path, valid_pid or project_id)
         
         if isinstance(result, dict):
             result["document_id"] = doc_record.id

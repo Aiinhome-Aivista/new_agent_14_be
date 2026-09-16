@@ -182,6 +182,7 @@ CREATE TABLE uploaded_documents (
 	project_id INTEGER,
 	status VARCHAR(50) DEFAULT 'Indexed in Vector Memory',
 	risks_detected INTEGER DEFAULT 0,
+	accuracy_score INTEGER DEFAULT 90,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (id),
 	FOREIGN KEY (project_id) REFERENCES projects (id)
@@ -200,6 +201,50 @@ CREATE TABLE generated_reports (
 	generated_by VARCHAR(100),
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (id),
+	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
+CREATE TABLE project_members (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	project_id INTEGER NOT NULL,
+	name VARCHAR(255) NOT NULL,
+	role VARCHAR(255) NOT NULL,
+	contact VARCHAR(255),
+	member_type VARCHAR(50) DEFAULT 'Internal FTE',
+	allocation_pct FLOAT DEFAULT 100.0,
+	is_active_today BOOLEAN DEFAULT TRUE,
+	meta_data JSON,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
+CREATE TABLE project_milestones (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	project_id INTEGER NOT NULL,
+	milestone_code VARCHAR(50) NOT NULL,
+	name VARCHAR(255) NOT NULL,
+	description TEXT,
+	target_date VARCHAR(100) DEFAULT 'TBD',
+	status VARCHAR(50) DEFAULT 'Scheduled',
+	completion_pct INTEGER DEFAULT 0,
+	days_left INTEGER DEFAULT 0,
+	tranche_amount FLOAT DEFAULT 0.0,
+	sla_score FLOAT,
+	sla_status VARCHAR(50) DEFAULT 'Scheduled',
+	meta_data JSON,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
+CREATE TABLE project_telemetries (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	project_id INTEGER NOT NULL,
+	telemetry_data JSON NOT NULL,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	UNIQUE (project_id),
 	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 );
 
@@ -268,6 +313,29 @@ INSERT INTO integration_settings (id, project_id, provider, base_url, username_e
 (4, 1, 'onedrive', 'https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive', 'onedrive.pmo@pwc-enterprise.com', FALSE, NOW())
 ON DUPLICATE KEY UPDATE project_id=VALUES(project_id), provider=VALUES(provider);
 
+-- 9. Initial Project Members (PRJ-014 Team)
+INSERT INTO project_members (id, project_id, name, role, contact, member_type, allocation_pct, is_active_today, meta_data, created_at) VALUES
+(1, 1, 'Ananya Sharma', 'Project Manager', 'ananya.sharma@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "Management", "location": "Onshore"}', NOW()),
+(2, 1, 'Rohan Mehta', 'Backend Lead (Python/Flask)', 'rohan.mehta@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "Core Engineering", "skills": ["Python", "Flask", "SQLAlchemy"]}', NOW()),
+(3, 1, 'Priya Nair', 'AI / Agent Engineer', 'priya.nair@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "AI / ML", "skills": ["Multi-Agent", "LangChain", "Reflexion"]}', NOW()),
+(4, 1, 'Arjun Verma', 'RAG / Knowledge Engineer', 'arjun.verma@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "Data Engineering", "skills": ["ChromaDB", "Semantic Search", "RAG"]}', NOW()),
+(5, 1, 'Sneha Iyer', 'Guardrails / Safety Engineer', 'sneha.iyer@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "InfoSec & Governance", "skills": ["OWASP LLM", "Prompt Defense"]}', NOW()),
+(6, 1, 'Vikram Singh', 'Frontend Lead (React)', 'vikram.singh@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "Core Engineering", "skills": ["React 19", "Vite", "Tailwind"]}', NOW()),
+(7, 1, 'Divya Reddy', 'QA / Test Engineer', 'divya.reddy@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "QA & Quality", "skills": ["Pytest", "Contract Testing"]}', NOW()),
+(8, 1, 'Karan Patel', 'DevOps / Infra', 'karan.patel@vpmproject.com', 'Internal FTE', 100.0, TRUE, '{"discipline": "Cloud Platform", "skills": ["Docker", "Kubernetes", "AWS"]}', NOW())
+ON DUPLICATE KEY UPDATE id=id;
 
+-- 10. Initial Project Milestones (PRJ-014 Milestones M1-M6)
+INSERT INTO project_milestones (id, project_id, milestone_code, name, description, target_date, status, completion_pct, days_left, tranche_amount, sla_score, sla_status, meta_data, created_at) VALUES
+(1, 1, 'M1', 'M1: Core platform setup: auth, DB schema, project/program CRUD', 'Core platform setup: auth, DB schema, project/program CRUD', 'Completed', 'Done', 100, 0, 350000.00, 98.0, 'Compliant', '{"signoff": "Approved", "deliverables_count": 4}', NOW()),
+(2, 1, 'M2', 'M2: Document ingestion + RAG pipeline (ChromaDB) operational', 'Document ingestion + RAG pipeline (ChromaDB) operational', 'Completed', 'Done', 100, 0, 450000.00, 95.0, 'Compliant', '{"signoff": "Approved", "deliverables_count": 4}', NOW()),
+(3, 1, 'M3', 'M3: Multi-agent orchestrator + guardrails integration', 'Multi-agent orchestrator + guardrails integration', 'In Progress', 'In Progress', 50, 30, 300000.00, 90.0, 'Compliant', '{"signoff": "In Progress", "deliverables_count": 4}', NOW()),
+(4, 1, 'M4', 'M4: Dashboard, KPI & risk register UI complete', 'Dashboard, KPI & risk register UI complete', 'In Progress', 'In Progress', 50, 45, 400000.00, 92.0, 'Compliant', '{"signoff": "In Progress", "deliverables_count": 4}', NOW()),
+(5, 1, 'M5', 'M5: Reporting module (SOW/MOM/Status auto-generation) hardening', 'Reporting module (SOW/MOM/Status auto-generation) hardening', 'Upcoming', 'At Risk', 20, 60, 250000.00, 74.0, 'At Risk', '{"signoff": "Pending", "deliverables_count": 4}', NOW()),
+(6, 1, 'M6', 'M6: Integration testing, security review & production readiness', 'Integration testing, security review & production readiness', 'Upcoming', 'Scheduled', 0, 90, 250000.00, NULL, 'Scheduled', '{"signoff": "Scheduled", "deliverables_count": 4}', NOW())
+ON DUPLICATE KEY UPDATE id=id;
 
-
+-- 11. Initial Project Telemetry (Full Dynamic JSON Document Store)
+INSERT INTO project_telemetries (id, project_id, telemetry_data, updated_at) VALUES
+(1, 1, '{"project_id": 1, "jira_key": "PRJ-014", "governance": {"vendor_sla_adherence": 100.0, "compliance_audit_score": 100, "compliance_gate": "Gate 3 Approved"}, "custom_attributes": {"source": "Project Charter & SOW", "tier": "Enterprise Mission-Critical", "compliance_framework": "PwC / Big-4 Enterprise PMO Standard"}}', NOW())
+ON DUPLICATE KEY UPDATE project_id=VALUES(project_id);

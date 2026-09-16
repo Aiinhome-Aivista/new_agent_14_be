@@ -525,6 +525,9 @@ def get_snapshot():
             active_project = db.db_session.query(Project).filter_by(id=int(project_id_param)).first()
         if not active_project:
             active_project = db.db_session.query(Project).filter_by(jira_key=str(project_id_param).strip()).first()
+    
+    if not active_project and str(project_id_param or '').strip().lower() not in ('all', 'portfolio'):
+        active_project = db.db_session.query(Project).filter_by(id=1).first() or db.db_session.query(Project).first()
 
     # Fetch the latest dashboard snapshot baseline
     snapshot = db.db_session.query(DashboardSnapshot).order_by(DashboardSnapshot.created_at.desc()).first()
@@ -626,22 +629,54 @@ def get_snapshot():
         for r in open_showstoppers
     ]
 
-    # Real-time query of escalations (Pending approval queue + Critical open risks)
-    pending_approvals = db.db_session.query(ApprovalQueue).filter_by(status="Pending").order_by(ApprovalQueue.created_at.desc()).all()
+    # Real-time query of escalations (Pending approval queue strictly matching Guardrails Queue)
+    all_pending = db.db_session.query(ApprovalQueue).filter_by(status="Pending").order_by(ApprovalQueue.created_at.desc(), ApprovalQueue.id.desc()).all()
+    pending_approvals = []
+    for item in all_pending:
+        payload = item.payload
+        if isinstance(payload, str):
+            try:
+                import json
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        if active_project:
+            p_id = payload.get('project_id') if isinstance(payload, dict) else None
+            if p_id in (active_project.id, str(active_project.id), active_project.jira_key):
+                pending_approvals.append(item)
+        else:
+            pending_approvals.append(item)
+
+    proj_map = {p.id: p.jira_key for p in all_projs}
     escalations_list = []
     for item in pending_approvals:
+        esc_id = f"ESC-{item.id:03d}"
+        payload = item.payload
+        if isinstance(payload, str):
+            try:
+                import json
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        esc_detail = payload.get('escalation') if isinstance(payload, dict) else None
+        if isinstance(esc_detail, dict):
+            esc_detail = esc_detail.get('title') or esc_detail.get('description') or str(esc_detail)
+        action_text = esc_detail if esc_detail else f"{item.action_type} Pending Approval"
+        p_id = payload.get('project_id') if isinstance(payload, dict) else None
+        p_key = proj_map.get(p_id) or (f"PRJ-{p_id:03d}" if isinstance(p_id, int) else None)
+
         escalations_list.append({
-            "id": f"ESC-00{item.id}",
-            "action": f"{item.action_type} Pending Approval",
-            "time": "Just now"
+            "id": esc_id,
+            "esc_id": esc_id,
+            "project_id": p_id,
+            "project_key": p_key,
+            "action": action_text,
+            "action_type": item.action_type,
+            "detail": esc_detail,
+            "time": item.created_at.strftime("%d/%m/%Y, %I:%M:%S %p").lower() if item.created_at else "Recent",
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "raw_id": item.id
         })
-    for r in open_showstoppers:
-        if r.severity == "Critical":
-            escalations_list.append({
-                "id": r.risk_id,
-                "action": f"{r.title} (Critical Delivery Threat)",
-                "time": "Active"
-            })
 
     # Burndown: if active_project, compute project-specific sprint curve
     is_new_project = False

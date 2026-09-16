@@ -109,10 +109,11 @@ def get_guardrails():
     policy_data = [p.to_dict() for p in policies]
 
     # Fetch real approval queue entries
-    all_queue_items = db.db_session.query(ApprovalQueue).order_by(ApprovalQueue.created_at.desc()).all()
+    all_queue_items = db.db_session.query(ApprovalQueue).order_by(ApprovalQueue.created_at.desc(), ApprovalQueue.id.desc()).all()
     queue_data = []
     for item in all_queue_items:
         i_dict = item.to_dict()
+        i_dict['esc_id'] = f"ESC-{item.id:03d}"
         payload = i_dict.get('payload', {})
         if isinstance(payload, str):
             try:

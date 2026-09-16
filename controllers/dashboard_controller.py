@@ -198,14 +198,8 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             qa = 0
             devops = 0
             pms = 0
-            phases = [
-                {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Pending SOW Ingestion", "status": "Scheduled", "completion_pct": 0, "days_left": 0},
-                {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "TBD", "status": "Scheduled", "completion_pct": 0, "days_left": 0},
-                {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "TBD", "status": "Scheduled", "completion_pct": 0, "days_left": 0},
-                {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "TBD", "status": "Scheduled", "completion_pct": 0, "days_left": 0},
-                {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": "TBD", "status": "Scheduled", "completion_pct": 0, "days_left": 0}
-            ]
-            curr_phase = "Phase 1: Project Setup & Document Ingestion"
+            phases = []
+            curr_phase = "Pending Setup"
             gate_status = "Gate 1 Initialized"
             sla_adherence = 100.0
             audit_score = 100
@@ -217,11 +211,11 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 fte_hc = len([m for m in team_list if m.get('member_type') == 'Internal FTE']) or total_hc
                 contractor_hc = total_hc - fte_hc
                 active_hc = len([m for m in team_list if m.get('is_active_today', True)]) or total_hc
-                util_rate = 94.0
-                target_date = "November 28, 2026"
-                days_left = 75
+                util_rate = 0.0
+                target_date = "Pending Baseline"
+                days_left = 0
                 spi = 1.00
-                sched_status = "Governed by Project Charter & SOW"
+                sched_status = "Active & Governed"
                 
                 # Dynamic count of roles
                 architects = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['architect', 'lead'])]))
@@ -243,55 +237,42 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                     total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
                     curr_phase = f"Active Milestone: {phases[min(completed_milestones, len(phases)-1)]['id']}" if completed_milestones < len(phases) else "Milestone Execution"
                 else:
-                    phases = [
-                        {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Sprint 1", "status": "Completed" if total_actual > 0 else "Scheduled", "completion_pct": 100 if total_actual > 0 else 0, "days_left": 0},
-                        {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Sprint 2-3", "status": "In Progress" if total_actual > 0 else "Scheduled", "completion_pct": 40 if total_actual > 0 else 0, "days_left": 30},
-                        {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sprint 4", "status": "Scheduled", "completion_pct": 0, "days_left": 60},
-                        {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Sprint 5", "status": "Scheduled", "completion_pct": 0, "days_left": 90},
-                        {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": "Sprint 6", "status": "Scheduled", "completion_pct": 0, "days_left": 120}
-                    ]
-                    curr_phase = "Phase 1: Project Setup" if total_actual == 0 else "Phase 2: Development"
-                    completed_tasks = max(0, int(total_actual / 25000))
-                    in_prog_tasks = max(0, int((total_planned - total_actual) / 80000)) if total_actual > 0 else 0
-                    review_tasks = 2 if in_prog_tasks > 4 else 0
-                    blocked_tasks = max(len(crit_ids), 0)
-                    total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-
+                    phases = []
+                    curr_phase = "Pending Setup"
+                    completed_tasks = 0
+                    in_prog_tasks = 0
+                    review_tasks = 0
+                    blocked_tasks = 0
+                    total_tasks = 0
+                
                 gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
                 sla_adherence = 100.0 if total_actual == 0 else (94.8 if len(crit_ids) == 0 else 88.2)
                 audit_score = 100 if total_actual == 0 else (96 if len(crit_ids) == 0 else 84)
             else:
-                # Calibrated based on actual activity
-                total_hc = max(4, int(total_planned / 120000)) if total_actual > 0 else 0
-                fte_hc = int(total_hc * 0.65) if total_hc > 0 else 0
-                contractor_hc = total_hc - fte_hc
-                active_hc = max(0, total_hc - 1) if total_hc > 0 else 0
-                util_rate = 85.0 if total_hc > 0 else 0.0
-                target_date = "November 28, 2026" if total_actual > 0 else "Pending Baseline"
-                days_left = 77 if total_actual > 0 else 0
+                total_hc = 0
+                fte_hc = 0
+                contractor_hc = 0
+                active_hc = 0
+                util_rate = 0.0
+                target_date = "Pending Baseline"
+                days_left = 0
                 spi = 1.00
-                sched_status = "Active & Governed" if total_actual > 0 else "Workspace Initialized"
-                completed_tasks = max(0, int(total_actual / 25000))
-                in_prog_tasks = max(0, int((total_planned - total_actual) / 80000)) if total_actual > 0 else 0
-                review_tasks = 2 if in_prog_tasks > 4 else 0
-                blocked_tasks = max(len(crit_ids), 0)
-                total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-                architects = max(1, int(total_hc * 0.15)) if total_hc > 0 else 0
-                engineers = max(2, int(total_hc * 0.50)) if total_hc > 0 else 0
-                qa = max(1, int(total_hc * 0.20)) if total_hc > 0 else 0
-                devops = max(1, int(total_hc * 0.15)) if total_hc > 0 else 0
-                pms = max(0, total_hc - (architects + engineers + qa + devops))
-                phases = [
-                    {"id": "PH-01", "name": f"{p_name} - Architecture & SOW Sign-off", "target_date": "Sprint 1", "status": "Completed" if total_actual > 0 else "Scheduled", "completion_pct": 100 if total_actual > 0 else 0, "days_left": 0},
-                    {"id": "PH-02", "name": f"{p_name} - Core Service Dev & Data Pipeline", "target_date": "Sprint 2-3", "status": "In Progress" if total_actual > 0 else "Scheduled", "completion_pct": 40 if total_actual > 0 else 0, "days_left": 30},
-                    {"id": "PH-03", "name": f"{p_name} - Integration & Security Compliance", "target_date": "Sprint 4", "status": "Scheduled", "completion_pct": 0, "days_left": 60},
-                    {"id": "PH-04", "name": f"{p_name} - UAT & Regulatory Clearance Gate", "target_date": "Sprint 5", "status": "Scheduled", "completion_pct": 0, "days_left": 90},
-                    {"id": "PH-05", "name": f"{p_name} - Production Cutover & Handover", "target_date": "Sprint 6", "status": "Scheduled", "completion_pct": 0, "days_left": 120}
-                ]
-                curr_phase = "Phase 1: Project Setup" if total_actual == 0 else "Phase 2: Development"
-                gate_status = "Gate 1 Initialized" if total_actual == 0 else ("Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold")
-                sla_adherence = 100.0 if total_actual == 0 else (94.8 if len(crit_ids) == 0 else 88.2)
-                audit_score = 100 if total_actual == 0 else (96 if len(crit_ids) == 0 else 84)
+                sched_status = "Workspace Initialized"
+                completed_tasks = 0
+                in_prog_tasks = 0
+                review_tasks = 0
+                blocked_tasks = 0
+                total_tasks = 0
+                architects = 0
+                engineers = 0
+                qa = 0
+                devops = 0
+                pms = 0
+                phases = []
+                curr_phase = "Pending Setup"
+                gate_status = "Gate 1 Initialized"
+                sla_adherence = 100.0
+                audit_score = 100
 
     else:
         # Cross-Project Portfolio Mode
@@ -341,16 +322,16 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 pms = max(1, len([m for m in all_members if any(k in m.role.lower() for k in ['manager', 'pm'])]))
                 engineers = max(1, total_hc - (architects + qa + devops + pms))
             else:
-                total_hc = 48
-                fte_hc = 32
-                contractor_hc = 16
-                active_hc = 44
-                util_rate = 92.4
-                architects = 6
-                engineers = 24
-                qa = 8
-                devops = 6
-                pms = 4
+                total_hc = 0
+                fte_hc = 0
+                contractor_hc = 0
+                active_hc = 0
+                util_rate = 0.0
+                architects = 0
+                engineers = 0
+                qa = 0
+                devops = 0
+                pms = 0
 
             target_date = "December 15, 2026"
             days_left = 94
@@ -367,23 +348,17 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 blocked_tasks = max(len(crit_ids) * 2, 2)
                 total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
             else:
-                completed_tasks = 158
-                in_prog_tasks = 46
-                review_tasks = 18
-                blocked_tasks = max(len(crit_ids) * 2, 4)
-                total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
+                completed_tasks = 0
+                in_prog_tasks = 0
+                review_tasks = 0
+                blocked_tasks = 0
+                total_tasks = 0
 
-            phases = [
-                {"id": "PH-01", "name": "Enterprise Architecture & Portfolio Charter", "target_date": "Apr 30, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-02", "name": "Phase 1 Core Infrastructure Deployments", "target_date": "Jul 15, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-                {"id": "PH-03", "name": "Multi-Stream System & SOW Integration", "target_date": "Oct 15, 2026", "status": "In Progress", "completion_pct": 72, "days_left": 33},
-                {"id": "PH-04", "name": "Enterprise UAT & Cross-Vendor Audit", "target_date": "Nov 15, 2026", "status": "Pending", "completion_pct": 20, "days_left": 64},
-                {"id": "PH-05", "name": "Global Cutover & Production Signoff", "target_date": "Dec 15, 2026", "status": "Scheduled", "completion_pct": 0, "days_left": 94}
-            ]
-            curr_phase = "Phase 3: Multi-Stream System & SOW Integration"
-            gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
-            sla_adherence = 94.8 if len(crit_ids) == 0 else 88.2
-            audit_score = 96 if len(crit_ids) == 0 else 84
+            phases = []
+            curr_phase = "Pending Setup"
+            gate_status = "Pending Setup"
+            sla_adherence = 100.0
+            audit_score = 100
 
     remaining_budget = max(0.0, total_planned - total_actual)
     cpi = round(total_planned / total_actual, 2) if total_actual > 0 else 1.00
@@ -413,40 +388,6 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
         vendors_list = []
 
     task_items = []
-    if total_tasks > 0:
-        p_prefix = (active_project.jira_key if active_project else "PRJ") or "PRJ"
-        # Itemized deliverables representing the real workstream breakdown
-        task_items = [
-            {"id": f"{p_prefix}-101", "title": "Core Architecture Blueprint & High-Level Design Sign-off", "workstream": "Architecture", "owner": "Enterprise Architects", "status": "Completed", "due_date": "Sprint 1"},
-            {"id": f"{p_prefix}-102", "title": "Secure Microservice Foundation & Ingestion Engine API", "workstream": "Core Engineering", "owner": "Backend Services Pod", "status": "Completed", "due_date": "Sprint 2"},
-            {"id": f"{p_prefix}-103", "title": "Enterprise SSO & Role-Based Access Governance Clearance", "workstream": "Security & InfoSec", "owner": "Security Team", "status": "Completed" if completed_tasks >= 3 else "In Progress", "due_date": "Sprint 2"},
-            {"id": f"{p_prefix}-104", "title": "Cross-System Real-time Data Connector & Pipeline Handshake", "workstream": "System Integration", "owner": "Cognizant / SI Partner", "status": "In Progress" if in_prog_tasks > 0 else "Completed", "due_date": "Sprint 3"},
-            {"id": f"{p_prefix}-105", "title": "Automated Vendor SLA Contractual Adherence Monitor", "workstream": "Governance & PMO", "owner": "PMO Coordinators", "status": "In Progress" if in_prog_tasks > 1 else "Completed", "due_date": "Sprint 3"},
-            {"id": f"{p_prefix}-106", "title": "End-to-End Regression Suite & Financial Audit Automation", "workstream": "QA Automation", "owner": "QA Test Engineers", "status": "Under Review / QA" if review_tasks > 0 else "In Progress", "due_date": "Sprint 4"},
-        ]
-        if blocked_tasks > 0 and len(crit_ids) > 0:
-            for idx, c_id in enumerate(crit_ids):
-                task_items.append({
-                    "id": f"{p_prefix}-90{idx+1}",
-                    "title": "Blocked Deliverable: Critical dependency & architectural hold",
-                    "workstream": "Cloud Infrastructure",
-                    "owner": "Vendor Delivery Head",
-                    "status": "Blocked / Impeded",
-                    "due_date": "Immediate Action",
-                    "linked_risk_id": c_id,
-                    "blocker_reason": f"Active Critical Risk {c_id} halting automated gate clearance."
-                })
-        elif blocked_tasks > 0:
-            task_items.append({
-                "id": f"{p_prefix}-901",
-                "title": "Blocked Deliverable: DirectConnect Latency & Vendor SLA Breach",
-                "workstream": "Cloud Infrastructure",
-                "owner": "Lead Cloud Architect",
-                "status": "Blocked / Impeded",
-                "due_date": "Active Sprint",
-                "linked_risk_id": "R-802",
-                "blocker_reason": "Vendor SLA adherence dropped below contractual threshold."
-            })
 
     if total_tasks > 0:
         task_breakdown = [

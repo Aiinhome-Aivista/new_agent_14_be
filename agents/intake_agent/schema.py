@@ -31,12 +31,18 @@ class ExtractedMilestone(BaseModel):
     slaScore: Optional[int] = None
     slaStatus: Optional[str] = "Scheduled"
 
+class ExtractedTask(BaseModel):
+    title: str
+    status: Optional[str] = "To Do"
+    assignee: Optional[str] = "Unassigned"
+
 class IntakeOutput(BaseModel):
     project_name: str = Field(default="Alpha Migration Program", description="Name of the project")
     jira_key: Optional[str] = Field(default="PRJ-101", description="Jira key if mentioned")
     status: str = Field(default="Active")
     risks: List[ExtractedRisk] = []
     milestones: Optional[List[ExtractedMilestone]] = []
+    tasks: Optional[List[ExtractedTask]] = []
     budget_planned: float = 0.0
     budget_actual: float = 0.0
 

@@ -11,4 +11,9 @@ If the document mentions delivery milestones, contractual phases, or tranches, e
 - "slaScore": number (e.g., 98) or null
 - "slaStatus": string ("Compliant", "Breached", or "Scheduled")
 
+If the document mentions tasks, work packages, or deliverables, extract an array 'tasks' where each item contains:
+- "title": string (e.g., "Map legacy database schema")
+- "status": string (e.g., "Completed", "In Progress", "To Do", "Blocked", "Under Review / QA")
+- "assignee": string (e.g., "Sarah Jenkins" or "Unassigned")
+
 Output valid JSON matching the required schema.

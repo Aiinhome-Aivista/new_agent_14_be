@@ -149,6 +149,48 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 days_left=0 if comp_pct == 100 else 45
                             )
                             db.db_session.add(new_ms)
+            elif any(any(k in h for k in ['task', 'deliverable', 'action item']) for h in headers):
+                from models.task_item import TaskItem
+                from datetime import datetime, timezone
+                title_idx = -1
+                for idx, h in enumerate(headers):
+                    if any(k in h for k in ['task', 'deliverable', 'action item', 'title', 'summary', 'work package']):
+                        title_idx = idx
+                        break
+                
+                if title_idx != -1:
+                    stat_idx = -1
+                    assign_idx = -1
+                    for idx, h in enumerate(headers):
+                        if 'status' in h:
+                            stat_idx = idx
+                        elif 'assignee' in h or 'owner' in h:
+                            assign_idx = idx
+                    
+                    for row_idx, row in enumerate(table.rows[1:]):
+                        cells = [c.text.strip() for c in row.cells]
+                        if len(cells) > title_idx and cells[title_idx]:
+                            t_title = cells[title_idx]
+                            t_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else 'To Do'
+                            t_assign = cells[assign_idx] if assign_idx >= 0 and len(cells) > assign_idx else 'Unassigned'
+                            
+                            existing_t = db.db_session.query(TaskItem).filter_by(project_id=project_id, summary=t_title).first()
+                            if existing_t:
+                                existing_t.status = t_stat
+                                existing_t.assignee = t_assign
+                                existing_t.updated_at = datetime.now(timezone.utc)
+                            else:
+                                new_t = TaskItem(
+                                    project_id=project_id,
+                                    jira_key=f"DOC-{project_id}-T{row_idx+1}",
+                                    summary=t_title,
+                                    status=t_stat,
+                                    priority="Medium",
+                                    assignee=t_assign,
+                                    created_at=datetime.now(timezone.utc),
+                                    updated_at=datetime.now(timezone.utc)
+                                )
+                                db.db_session.add(new_t)
         db.db_session.commit()
     except Exception as e:
         print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
@@ -389,6 +431,7 @@ def fetch_connector_data():
                 "type": "Jira Issue",
                 "status": issue.get("status", "Open"),
                 "priority": issue.get("priority", "Medium"),
+                "assignee": issue.get("assignee", "Unassigned"),
                 "size": "Agile Issue",
                 "bytes": 2048,
                 "description": f"Jira Issue {issue.get('id')} under {proj_name}. Status: {issue.get('status')}. Priority: {issue.get('priority')}.",
@@ -503,6 +546,7 @@ def ingest_connector_items():
         item_type = item.get("type") or provider.upper()
         status_val = item.get("status") or "Active"
         priority_val = item.get("priority") or "Medium"
+        assignee_val = item.get("assignee") or "Unassigned"
         desc = item.get("description") or f"{title} from {prov_title}"
 
         # 1. Prepare semantic text content for ChromaDB
@@ -596,6 +640,32 @@ def ingest_connector_items():
                     created_at=datetime.now(timezone.utc)
                 )
                 db.db_session.add(new_r)
+
+        # Store as TaskItem so it shows up in the dashboard
+        from models.task_item import TaskItem
+        if provider in ["jira", "azure_devops"]:
+            existing_task = db.db_session.query(TaskItem).filter(
+                TaskItem.project_id == project_id,
+                TaskItem.jira_key == item_id
+            ).first()
+            if not existing_task:
+                new_task = TaskItem(
+                    project_id=project_id,
+                    jira_key=item_id,
+                    summary=title,
+                    status=status_val,
+                    priority=priority_val,
+                    assignee=assignee_val,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc)
+                )
+                db.db_session.add(new_task)
+            else:
+                existing_task.summary = title
+                existing_task.status = status_val
+                existing_task.priority = priority_val
+                existing_task.assignee = assignee_val
+                existing_task.updated_at = datetime.now(timezone.utc)
 
     db.db_session.commit()
 

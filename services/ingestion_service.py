@@ -173,6 +173,37 @@ class IngestionService:
             )
             db.db_session.add(queue_item)
 
+        # Extract and persist tasks from the document
+        from models.task_item import TaskItem
+        from datetime import datetime, timezone
+        
+        extracted_tasks = final_state.get("intake", {}).get("tasks", [])
+        if extracted_tasks and len(extracted_tasks) > 0:
+            for idx, t in enumerate(extracted_tasks):
+                t_title = t.get("title", f"Document Task {idx}") if isinstance(t, dict) else str(t)
+                t_status = t.get("status", "To Do") if isinstance(t, dict) else "To Do"
+                t_assignee = t.get("assignee", "Unassigned") if isinstance(t, dict) else "Unassigned"
+                
+                # Check if a task with this summary already exists to avoid duplicates
+                existing_t = db.db_session.query(TaskItem).filter_by(project_id=project_id, summary=t_title).first()
+                if existing_t:
+                    existing_t.status = t_status
+                    existing_t.assignee = t_assignee
+                    existing_t.updated_at = datetime.now(timezone.utc)
+                else:
+                    new_task = TaskItem(
+                        project_id=project_id,
+                        jira_key=f"DOC-{project_id}-{idx+100}",
+                        summary=t_title,
+                        status=t_status,
+                        priority="Medium",
+                        assignee=t_assignee,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc)
+                    )
+                    db.db_session.add(new_task)
+            db.db_session.commit()
+
         # Determine overall AI processing status across pipeline agents
         intake_status = final_state.get("intake", {}).get("ai_processing_status")
         risk_status = risk_output.get("ai_processing_status")

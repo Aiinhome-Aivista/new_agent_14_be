@@ -12,3 +12,4 @@ from .generated_report import GeneratedReport
 from .project_member import ProjectMember
 from .project_milestone import ProjectMilestone
 from .project_telemetry import ProjectTelemetry
+from .task_item import TaskItem

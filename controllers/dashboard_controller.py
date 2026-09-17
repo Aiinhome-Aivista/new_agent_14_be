@@ -176,7 +176,9 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
         doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=active_project.id).count() if db.db_session else 0
         risk_count = db.db_session.query(RiskRegister).filter_by(project_id=active_project.id).count() if db.db_session else 0
         member_count = db.db_session.query(ProjectMember).filter_by(project_id=active_project.id).count() if db.db_session else 0
-        is_new_project = (doc_count == 0 and total_actual == 0 and risk_count == 0 and member_count == 0)
+        from models.task_item import TaskItem
+        task_count = db.db_session.query(TaskItem).filter_by(project_id=active_project.id).count() if db.db_session else 0
+        is_new_project = (doc_count == 0 and total_actual == 0 and risk_count == 0 and member_count == 0 and task_count == 0)
 
         if is_new_project:
             total_hc = 0
@@ -226,24 +228,42 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 if engineers <= 0:
                     engineers = max(1, len([m for m in team_list if any(k in m['role'].lower() for k in ['engineer', 'dev', 'safety'])]))
                 
+                from models.task_item import TaskItem
+                from tools.jira_tool import JiraTool
+                
+                if active_project.jira_key:
+                    # Sync tasks from Jira (runs fast enough for a dashboard load in our case)
+                    JiraTool.sync_project_telemetry(active_project.id)
+                
+                # Fetch actual tasks from DB
+                completed_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["Done", "Completed", "Resolved"])
+                ).count()
+                in_prog_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["In Progress", "Active", "Open", "To Do"])
+                ).count()
+                review_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["In Review", "QA", "Review"])
+                ).count()
+                blocked_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["Blocked", "Impeded"])
+                ).count()
+                total_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id
+                ).count()
+                
                 if doc_telemetry.get('milestones'):
                     phases = doc_telemetry['milestones']
                     completed_milestones = len([m for m in phases if m.get('completion_pct', 0) == 100])
                     in_prog_milestones = len([m for m in phases if 0 < m.get('completion_pct', 0) < 100])
-                    completed_tasks = completed_milestones * 6 + 4
-                    in_prog_tasks = in_prog_milestones * 5 + 3
-                    review_tasks = 2
-                    blocked_tasks = max(len(crit_ids), 0)
-                    total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
                     curr_phase = f"Active Milestone: {phases[min(completed_milestones, len(phases)-1)]['id']}" if completed_milestones < len(phases) else "Milestone Execution"
                 else:
                     phases = []
                     curr_phase = "Pending Setup"
-                    completed_tasks = 0
-                    in_prog_tasks = 0
-                    review_tasks = 0
-                    blocked_tasks = 0
-                    total_tasks = 0
                 
                 gate_status = "Gate 3 Approved" if len(crit_ids) == 0 else "Gate 3 Conditional Hold"
                 sla_adherence = 100.0 if total_actual == 0 else (94.8 if len(crit_ids) == 0 else 88.2)
@@ -258,11 +278,26 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 days_left = 0
                 spi = 1.00
                 sched_status = "Workspace Initialized"
-                completed_tasks = 0
-                in_prog_tasks = 0
-                review_tasks = 0
-                blocked_tasks = 0
-                total_tasks = 0
+                from models.task_item import TaskItem
+                completed_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["Done", "Completed", "Resolved"])
+                ).count()
+                in_prog_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["In Progress", "Active", "Open", "To Do"])
+                ).count()
+                review_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["In Review", "QA", "Review"])
+                ).count()
+                blocked_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id,
+                    TaskItem.status.in_(["Blocked", "Impeded"])
+                ).count()
+                total_tasks = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == active_project.id
+                ).count()
                 architects = 0
                 engineers = 0
                 qa = 0
@@ -278,10 +313,12 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
         # Cross-Project Portfolio Mode
         from models.uploaded_document import UploadedDocument
         from models.risk_register import RiskRegister
+        from models.task_item import TaskItem
         p_name = "Cross-Project Portfolio"
         total_docs = db.db_session.query(UploadedDocument).count() if db.db_session else 0
         total_risks_count = len(crit_ids) + len(high_ids)
-        portfolio_is_new = (total_docs == 0 and total_actual == 0 and total_risks_count == 0)
+        total_tasks_db = db.db_session.query(TaskItem).count() if db.db_session else 0
+        portfolio_is_new = (total_docs == 0 and total_actual == 0 and total_risks_count == 0 and total_tasks_db == 0)
 
         if portfolio_is_new:
             total_hc = 0
@@ -342,17 +379,13 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             if all_milestones:
                 completed_milestones = len([m for m in all_milestones if m.completion_pct == 100])
                 in_prog_milestones = len([m for m in all_milestones if 0 < m.completion_pct < 100])
-                completed_tasks = completed_milestones * 6 + 4
-                in_prog_tasks = in_prog_milestones * 5 + 3
-                review_tasks = 2
-                blocked_tasks = max(len(crit_ids) * 2, 2)
-                total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
-            else:
-                completed_tasks = 0
-                in_prog_tasks = 0
-                review_tasks = 0
-                blocked_tasks = 0
-                total_tasks = 0
+                
+            from models.task_item import TaskItem
+            completed_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["Done", "Completed", "Resolved"])).count() if db.db_session else 0
+            in_prog_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["In Progress", "Active", "Open", "To Do"])).count() if db.db_session else 0
+            review_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["In Review", "QA", "Review"])).count() if db.db_session else 0
+            blocked_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["Blocked", "Impeded"])).count() if db.db_session else 0
+            total_tasks = db.db_session.query(TaskItem).count() if db.db_session else 0
 
             phases = []
             curr_phase = "Pending Setup"
@@ -388,7 +421,34 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
         vendors_list = []
 
     task_items = []
-
+    if db.db_session:
+        from models.task_item import TaskItem
+        if active_project:
+            db_tasks = db.db_session.query(TaskItem).filter_by(project_id=active_project.id).all()
+        else:
+            db_tasks = db.db_session.query(TaskItem).all()
+            
+        for t in db_tasks:
+            # Map Jira status to dashboard grouped status for filtering
+            status_lower = t.status.lower() if t.status else ""
+            mapped_status = "In Progress"
+            if any(s in status_lower for s in ["done", "completed", "resolved"]):
+                mapped_status = "Completed"
+            elif any(s in status_lower for s in ["review", "qa"]):
+                mapped_status = "Under Review / QA"
+            elif any(s in status_lower for s in ["block", "impede"]):
+                mapped_status = "Blocked / Impeded"
+                
+            task_items.append({
+                "id": t.jira_key or f"TSK-{t.id}",
+                "title": t.summary,
+                "status": mapped_status,
+                "priority": t.priority,
+                "owner": t.assignee or "Unassigned",
+                "workstream": "Development", # Default for now
+                "due_date": "Active Sprint",
+                "linked_risk_id": None
+            })
     if total_tasks > 0:
         task_breakdown = [
             {"name": "Completed", "count": completed_tasks, "percentage": round(completed_tasks / total_tasks * 100), "color": "#10B981"},
@@ -491,8 +551,13 @@ def get_snapshot():
     for p in all_projs:
         b = db.db_session.query(Budget).filter_by(project_id=p.id).order_by(Budget.created_at.desc()).first()
         if b:
-            pl = f"${float(b.planned_spend)/1000000:.1f}M" if float(b.planned_spend)>=1000000 else f"${float(b.planned_spend)/1000:.0f}K"
-            ac = f"${float(b.actual_spend)/1000000:.1f}M" if float(b.actual_spend)>=1000000 else f"${float(b.actual_spend)/1000:.0f}K"
+            def _fmt(v):
+                v = float(v)
+                if abs(v) >= 10000000: return f"₹{v/10000000:.2f}Cr"
+                if abs(v) >= 100000: return f"₹{v/100000:.1f}L"
+                return f"₹{v:,.0f}"
+            pl = _fmt(b.planned_spend or 0)
+            ac = _fmt(b.actual_spend or 0)
             b_str = f"Budget: {ac} / {pl}"
         else:
             b_str = "Budget: Active"
@@ -556,7 +621,12 @@ def get_snapshot():
     burn_pct = round((total_actual / total_planned * 100)) if total_planned > 0 else 0
 
     def fmt_m_val(val):
-        return f"${val / 1000000:.2f}M" if abs(val) >= 1000000 else f"${val / 1000:.0f}K"
+        if abs(val) >= 10000000:
+            return f"₹{val / 10000000:.2f}Cr"
+        elif abs(val) >= 100000:
+            return f"₹{val / 100000:.1f}L"
+        else:
+            return f"₹{val:,.0f}"
 
     total_budget_burn_str = f"{fmt_m_val(total_actual)} / {fmt_m_val(total_planned)}"
     sched_variance_str = f"{'+' if tot_variance >= 0 else '-'}{fmt_m_val(abs(tot_variance))} {'Surplus' if tot_variance >= 0 else 'Deficit'}"
@@ -1186,24 +1256,32 @@ def get_project_team_data(project_id):
         else:
             skills = ['Enterprise Software Engineering', 'System Integration', 'Git', 'Agile Delivery']
 
-        # Itemized deliverables / tasks
+        # Fetch all tasks from DB for this project
+        from models.task_item import TaskItem
+        all_db_tasks = db.db_session.query(TaskItem).filter_by(project_id=project.id).all() if db.db_session else []
+        
+        # Try to match by assignee, or fallback to distributing evenly
+        member_tasks = []
+        for t in all_db_tasks:
+            if t.assignee and (m_name.lower() in t.assignee.lower() or t.assignee.lower() in m_name.lower()):
+                member_tasks.append(t)
+                
+        # If no strict match and we want to show some tasks, distribute them evenly
+        if not member_tasks and all_db_tasks:
+            # Simple hash to distribute tasks
+            num_members = len(raw_team) if raw_team else 1
+            assigned_indices = [i for i in range(len(all_db_tasks)) if i % num_members == idx]
+            member_tasks = [all_db_tasks[i] for i in assigned_indices]
+
         assigned_tasks = [
             {
-                "id": f"TSK-{idx*10+101}",
-                "title": f"Phase Deliverable: {m_role} core implementation & sign-off",
-                "status": "In Progress" if idx % 2 == 0 else "Completed",
-                "priority": "High" if idx < 3 else "Medium",
+                "id": t.jira_key or f"TSK-{t.id}",
+                "title": t.summary,
+                "status": t.status,
+                "priority": t.priority,
                 "due_date": "Active Sprint",
                 "workstream": m_role
-            },
-            {
-                "id": f"TSK-{idx*10+102}",
-                "title": f"Quality & Compliance verification for {project.jira_key or 'PRJ'}",
-                "status": "In Progress" if idx % 3 == 0 else ("Under Review" if idx % 2 == 1 else "Completed"),
-                "priority": "Medium",
-                "due_date": "Next Milestone",
-                "workstream": "Governance"
-            }
+            } for t in member_tasks
         ]
 
         members.append({

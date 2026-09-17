@@ -179,7 +179,7 @@ class JiraTool:
                 search_url,
                 headers=headers,
                 auth=auth,
-                params={"jql": jql, "maxResults": 50, "fields": "key,summary,status,priority"},
+                params={"jql": jql, "maxResults": 50, "fields": "key,summary,status,priority,assignee"},
                 timeout=10
             )
 
@@ -188,11 +188,14 @@ class JiraTool:
                 issues = []
                 for issue in data.get("issues", []):
                     fields = issue.get("fields") or {}
+                    assignee_obj = fields.get("assignee") or {}
+                    assignee_name = assignee_obj.get("displayName") or "Unassigned"
                     issues.append({
                         "id": issue.get("key"),
                         "summary": fields.get("summary", ""),
                         "status": (fields.get("status") or {}).get("name", "Open"),
-                        "priority": (fields.get("priority") or {}).get("name", "Medium")
+                        "priority": (fields.get("priority") or {}).get("name", "Medium"),
+                        "assignee": assignee_name
                     })
                     
                 return {
@@ -482,6 +485,7 @@ class JiraTool:
         import db
         from models.project import Project
         from models.risk_register import RiskRegister
+        from models.task_item import TaskItem
         import random
 
         if not db.db_session:
@@ -496,11 +500,36 @@ class JiraTool:
 
         issues = fetch_res.get("issues", [])
         synced_risks = 0
+        synced_tasks = 0
 
-        # Map critical/high issues into RiskRegister
         for iss in issues:
             priority = iss.get("priority", "Medium")
             issue_id = iss.get("id")
+            
+            # Map issues to TaskItem
+            if issue_id:
+                task = db.db_session.query(TaskItem).filter_by(
+                    project_id=proj.id,
+                    jira_key=issue_id
+                ).first()
+                if not task:
+                    new_task = TaskItem(
+                        project_id=proj.id,
+                        jira_key=issue_id,
+                        summary=iss.get("summary", f"Jira Issue {issue_id}"),
+                        status=iss.get("status", "Open"),
+                        priority=priority,
+                        assignee=iss.get("assignee", "Unassigned")
+                    )
+                    db.db_session.add(new_task)
+                    synced_tasks += 1
+                else:
+                    task.summary = iss.get("summary", task.summary)
+                    task.status = iss.get("status", task.status)
+                    task.priority = priority
+                    task.assignee = iss.get("assignee", task.assignee)
+
+            # Map critical/high issues into RiskRegister
             if priority in ("Critical", "High") and issue_id:
                 existing_risk = db.db_session.query(RiskRegister).filter_by(
                     project_id=proj.id,

@@ -119,6 +119,22 @@ class OneDriveTool:
                             "last_modified": it.get("lastModifiedDateTime", "")[:10],
                             "source": "Microsoft OneDrive"
                         })
+                    elif "folder" in it and it.get("id"):
+                        # Also inspect subfolder (e.g., 'Agent 14' folder)
+                        try:
+                            f_resp = requests.get(f"https://graph.microsoft.com/v1.0/me/drive/items/{it['id']}/children", headers=headers, timeout=6)
+                            if f_resp.status_code == 200:
+                                for sub_it in f_resp.json().get("value", []):
+                                    if "file" in sub_it:
+                                        s_mb = round(sub_it.get('size', 0) / (1024 * 1024), 2)
+                                        docs.append({
+                                            "name": sub_it.get("name"),
+                                            "size": f"{s_mb} MB",
+                                            "last_modified": sub_it.get("lastModifiedDateTime", "")[:10],
+                                            "source": f"Microsoft OneDrive ({it.get('name')})"
+                                        })
+                        except Exception:
+                            pass
                 return {
                     "success": True,
                     "provider": "onedrive",

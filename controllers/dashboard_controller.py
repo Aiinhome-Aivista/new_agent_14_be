@@ -5,6 +5,8 @@ from models.project import Project
 from models.risk_register import RiskRegister
 from models.budget import Budget
 from models.approval_queue import ApprovalQueue
+from models.uploaded_document import UploadedDocument
+from models.task_item import TaskItem
 from controllers.risks_controller import enrich_risk_dict
 from services.auth_service import require_roles
 
@@ -394,24 +396,25 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             audit_score = 100
 
     remaining_budget = max(0.0, total_planned - total_actual)
-    if total_actual > 0:
-        completion_ratio = (completed_tasks / max(1, total_tasks)) if total_tasks > 0 else 0.43
+    if total_tasks > 0:
+        completion_ratio = completed_tasks / total_tasks
         earned_val = round(completion_ratio * total_planned, 2)
-        cpi = round(max(0.5, min(2.0, earned_val / total_actual)), 2)
-        monthly_run_rate = round(total_actual / 3.0, 2)
+        cpi = round(max(0.0, min(5.0, earned_val / total_actual)), 2) if total_actual > 0 else 1.00
+        monthly_run_rate = round(total_actual / 3.0, 2) if total_actual > 0 else 0.0
         cv = round(earned_val - total_actual, 2)
         evm_status = "Healthy & On Track" if cpi >= 1.0 else "Cost Overrun Risk"
         # SPI (Schedule Performance Index) = Earned Value / Planned Value to Date
-        # Baseline planned allocation through Sprint 3 (50% of timeline):
         planned_to_date = total_planned * 0.45 if total_planned > 0 else earned_val
-        spi = round(max(0.5, min(2.0, earned_val / max(1.0, planned_to_date))), 2) if planned_to_date > 0 else 1.00
+        spi = round(max(0.0, min(5.0, earned_val / max(1.0, planned_to_date))), 2) if planned_to_date > 0 else 1.00
     else:
+        # Strict zero: 0 tasks logged in DB means 0 work completed!
+        completion_ratio = 0.0
         earned_val = 0.0
-        cpi = 1.00
-        monthly_run_rate = 0.0
-        cv = 0.0
-        evm_status = "Initial Allocation"
-        spi = 1.00
+        cpi = 0.00
+        monthly_run_rate = round(total_actual / 3.0, 2) if total_actual > 0 else 0.0
+        cv = round(-total_actual, 2)
+        evm_status = "No Tasks Logged (0% Done)"
+        spi = 0.00
 
     if total_hc > 0:
         roles_list = [
@@ -508,7 +511,7 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             "earned_value": earned_val,
             "cost_variance": cv,
             "evm_status": evm_status,
-            "active_sprint": "Sprint 3"
+            "active_sprint": "Sprint 3" if total_actual > 0 else "Sprint 1"
         },
         "timeline": {
             "target_completion_date": target_date,
@@ -633,9 +636,15 @@ def get_snapshot():
         latest_b = db.db_session.query(Budget).filter_by(project_id=active_project.id).order_by(Budget.created_at.desc()).first()
         total_planned = float(latest_b.planned_spend) if latest_b else 1500000.0
         total_actual = float(latest_b.actual_spend) if latest_b else 0.0
+        from models.task_item import TaskItem
+        doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=active_project.id).count() if db.db_session else 0
+        risk_count = db.db_session.query(RiskRegister).filter_by(project_id=active_project.id).count() if db.db_session else 0
+        task_count = db.db_session.query(TaskItem).filter_by(project_id=active_project.id).count() if db.db_session else 0
+        is_new_project = (doc_count == 0 and total_actual == 0 and risk_count == 0 and task_count == 0)
     else:
         total_planned = 0.0
         total_actual = 0.0
+        is_new_project = False
         for p in all_projs:
             p_b = db.db_session.query(Budget).filter_by(project_id=p.id).order_by(Budget.created_at.desc()).first()
             if p_b:
@@ -711,64 +720,62 @@ def get_snapshot():
         })
 
     # Burndown: compute sprint curve reflecting progressive expenditure
-    is_new_project = False
+    pl_k = max(10, int(total_planned / 1000))
+    ac_k = int(total_actual / 1000)
+
+    # Strict DB Query: calculate Earned Value strictly from real TaskItem records
+    from models.task_item import TaskItem
     if active_project:
-        from models.uploaded_document import UploadedDocument
-        doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=active_project.id).count() if db.db_session else 0
-        is_new_project = (doc_count == 0 and len(all_risks) == 0 and total_actual == 0)
-
-    if is_new_project:
-        snap_data["burndown"] = []
-        snap_data["milestones"] = []
+        db_completed_tasks = db.db_session.query(TaskItem).filter(
+            TaskItem.project_id == active_project.id,
+            TaskItem.status.in_(["Done", "Completed", "Resolved"])
+        ).count() if db.db_session else 0
+        db_total_tasks = db.db_session.query(TaskItem).filter(
+            TaskItem.project_id == active_project.id
+        ).count() if db.db_session else 0
     else:
-        pl_k = max(10, int(total_planned / 1000))
-        ac_k = int(total_actual / 1000)
+        db_completed_tasks = db.db_session.query(TaskItem).filter(
+            TaskItem.status.in_(["Done", "Completed", "Resolved"])
+        ).count() if db.db_session else 0
+        db_total_tasks = db.db_session.query(TaskItem).count() if db.db_session else 0
 
-        # Dynamic Earned Value (EV) derived from deliverable completion ratio
-        from models.project_milestone import ProjectMilestone
-        ms_query = db.db_session.query(ProjectMilestone)
-        if active_project:
-            ms_query = ms_query.filter_by(project_id=active_project.id)
-        all_ms = ms_query.all() if db.db_session else []
-        if all_ms:
-            comp_ms = len([m for m in all_ms if m.completion_pct == 100])
-            in_ms = len([m for m in all_ms if 0 < m.completion_pct < 100])
-            c_tasks = comp_ms * 6 + 4
-            tot_tasks = c_tasks + in_ms * 5 + 3 + 2 + 1
-            ev_ratio = c_tasks / max(1, tot_tasks)
-        else:
-            ev_ratio = 0.432  # 43.2% deliverable completion baseline
-        
-        earned_k = max(1, int(pl_k * ev_ratio))
+    if db_total_tasks > 0:
+        ev_ratio = db_completed_tasks / db_total_tasks
+        earned_k = int(pl_k * ev_ratio)
+    else:
+        ev_ratio = 0.0
+        earned_k = 0
 
-        if ac_k <= 0:
-            snap_data["burndown"] = [
-                {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": 0, "earned": 0},
-                {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": None, "earned": None},
-                {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": None, "earned": None},
-                {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": None, "earned": None},
-                {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": None, "earned": None},
-                {"sprint": "Sprint 6", "planned": pl_k, "actual": None, "earned": None}
-            ]
-        else:
-            # Progressive cumulative spend and earned value curves up to Sprint 3 (Current)
-            a1 = max(1, int(ac_k * 0.25))
-            a2 = max(a1, int(ac_k * 0.65))
-            a3 = ac_k
+    if ac_k <= 0:
+        e1 = int(earned_k * 0.28) if earned_k > 0 else 0
+        snap_data["burndown"] = [
+            {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": 0, "earned": e1, "is_current": True},
+            {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": None, "earned": None},
+            {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": None, "earned": None},
+            {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": None, "earned": None},
+            {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": None, "earned": None},
+            {"sprint": "Sprint 6", "planned": pl_k, "actual": None, "earned": None}
+        ]
+        snap_data["active_sprint"] = "Sprint 1"
+    else:
+        # Progressive cumulative spend and earned value curves up to Sprint 3 (Current)
+        a1 = max(1, int(ac_k * 0.25))
+        a2 = max(a1, int(ac_k * 0.65))
+        a3 = ac_k
 
-            e1 = max(1, int(earned_k * 0.28))
-            e2 = max(e1, int(earned_k * 0.68))
-            e3 = earned_k
+        e1 = int(earned_k * 0.28) if earned_k > 0 else 0
+        e2 = int(earned_k * 0.68) if earned_k > 0 else 0
+        e3 = earned_k
 
-            snap_data["burndown"] = [
-                {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": a1, "earned": e1},
-                {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": a2, "earned": e2},
-                {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": a3, "earned": e3, "is_current": True},
-                {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": None, "earned": None},
-                {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": None, "earned": None},
-                {"sprint": "Sprint 6", "planned": pl_k, "actual": None, "earned": None}
-            ]
-            snap_data["active_sprint"] = "Sprint 3"
+        snap_data["burndown"] = [
+            {"sprint": "Sprint 1", "planned": int(pl_k * 0.15), "actual": a1, "earned": e1},
+            {"sprint": "Sprint 2", "planned": int(pl_k * 0.35), "actual": a2, "earned": e2},
+            {"sprint": "Sprint 3", "planned": int(pl_k * 0.55), "actual": a3, "earned": e3, "is_current": True},
+            {"sprint": "Sprint 4", "planned": int(pl_k * 0.75), "actual": None, "earned": None},
+            {"sprint": "Sprint 5", "planned": int(pl_k * 0.90), "actual": None, "earned": None},
+            {"sprint": "Sprint 6", "planned": pl_k, "actual": None, "earned": None}
+        ]
+        snap_data["active_sprint"] = "Sprint 3"
 
     snap_data["financials"] = {
         "totalBudget": total_planned,
@@ -1103,7 +1110,22 @@ def get_project_details(project_id):
     # becomes available later (via JiraTool), that will serve as the real sprint data source.
     ac_k = int(actual_val / 1000)
     pl_k = int(planned_val / 1000)
-    earned_k = max(1, int(pl_k * 0.432))
+
+    # Strictly query real TaskItem records: 0 tasks in DB = strictly 0 earned value!
+    from models.task_item import TaskItem
+    db_completed = db.db_session.query(TaskItem).filter(
+        TaskItem.project_id == project.id,
+        TaskItem.status.in_(["Done", "Completed", "Resolved"])
+    ).count() if db.db_session else 0
+    db_total = db.db_session.query(TaskItem).filter(
+        TaskItem.project_id == project.id
+    ).count() if db.db_session else 0
+
+    if db_total > 0:
+        ev_ratio = db_completed / db_total
+        earned_k = int(pl_k * ev_ratio)
+    else:
+        earned_k = 0
 
     if actual_val == 0:
         burndown = [
@@ -1119,8 +1141,8 @@ def get_project_details(project_id):
         a2 = max(a1, int(ac_k * 0.65))
         a3 = ac_k
 
-        e1 = max(1, int(earned_k * 0.28))
-        e2 = max(e1, int(earned_k * 0.68))
+        e1 = int(earned_k * 0.28) if earned_k > 0 else 0
+        e2 = int(earned_k * 0.68) if earned_k > 0 else 0
         e3 = earned_k
 
         burndown = [

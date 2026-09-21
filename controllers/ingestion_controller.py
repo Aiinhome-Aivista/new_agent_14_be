@@ -517,6 +517,7 @@ def ingest_connector_items():
     provider = data.get("provider", "connector")
     items = data.get("items", [])
     raw_pid = data.get("project_id", 1)
+    payload_accuracy_score = data.get("accuracy_score")
     try:
         project_id = int(raw_pid)
     except (ValueError, TypeError):
@@ -524,6 +525,22 @@ def ingest_connector_items():
 
     if not items:
         return jsonify({"success": False, "error": "No items selected for ingestion."}), 400
+
+    # Resolve default accuracy score: from payload, or evaluate dynamically, or fallback to 90
+    default_acc = None
+    if payload_accuracy_score is not None:
+        try:
+            default_acc = int(payload_accuracy_score)
+        except (ValueError, TypeError):
+            default_acc = None
+
+    if default_acc is None and items:
+        try:
+            from services.accuracy_service import DataAccuracyService
+            eval_res = DataAccuracyService.evaluate_connector_items(items, project_id=project_id, provider=provider)
+            default_acc = int(eval_res.get("match_percentage", 90))
+        except Exception:
+            default_acc = 90
 
     proj = db.db_session.query(Project).filter_by(id=project_id).first()
     proj_name = proj.name if proj else f"Project #{project_id}"
@@ -548,6 +565,16 @@ def ingest_connector_items():
         priority_val = item.get("priority") or "Medium"
         assignee_val = item.get("assignee") or "Unassigned"
         desc = item.get("description") or f"{title} from {prov_title}"
+
+        # Determine item-level accuracy score
+        item_acc = item.get("accuracy_score")
+        if item_acc is not None:
+            try:
+                final_acc = int(item_acc)
+            except (ValueError, TypeError):
+                final_acc = default_acc if default_acc is not None else 90
+        else:
+            final_acc = default_acc if default_acc is not None else 90
 
         # 1. Prepare semantic text content for ChromaDB
         full_content = (
@@ -584,6 +611,7 @@ def ingest_connector_items():
             for c_idx in range(len(chunks))
         ]
 
+        vector_indexed = False
         try:
             semantic_memory.add_documents(
                 collection_name="program_knowledge",
@@ -591,8 +619,10 @@ def ingest_connector_items():
                 metadatas=metadatas,
                 ids=chunk_ids
             )
+            vector_indexed = True
         except Exception as vec_err:
             print(f"Warning: Vector DB insertion for {item_id}: {vec_err}")
+            vector_indexed = False
 
         # 3. Store in MySQL uploaded_documents table
         file_ext = (
@@ -610,9 +640,9 @@ def ingest_connector_items():
             uploaded_by=f"{prov_title} Agent",
             uploaded_by_role="Connector Pipeline",
             project_id=project_id,
-            status="Indexed in Vector Memory",
+            status="Indexed in Vector Memory" if vector_indexed else "Indexing Failed (Vector DB Error)",
             risks_detected=has_risk,
-            accuracy_score=int(item.get("accuracy_score") or 90),
+            accuracy_score=final_acc,
             created_at=datetime.now(timezone.utc)
         )
         db.db_session.add(doc_record)

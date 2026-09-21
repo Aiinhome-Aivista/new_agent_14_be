@@ -2,15 +2,22 @@ import chromadb
 from chromadb.config import Settings
 import os
 
-# Default to a local persistent directory
-CHROMA_DATA_DIR = os.path.join(os.getcwd(), 'chroma_data')
+# Default to a local persistent directory anchored to the backend root
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHROMA_DATA_DIR = os.path.join(BASE_DIR, 'chroma_data')
 
 class SemanticMemory:
     """
     Manages semantic memory using ChromaDB for RAG (MOMs, reports, program knowledge embeddings).
     """
     def __init__(self, persist_directory: str = CHROMA_DATA_DIR):
+        os.makedirs(persist_directory, exist_ok=True)
         self.client = chromadb.PersistentClient(path=persist_directory)
+        # Eagerly initialize default collection so ChromaDB SQLite migrations run at startup
+        try:
+            self.client.get_or_create_collection(name="program_knowledge")
+        except Exception as e:
+            print(f"Warning: Failed to initialize default ChromaDB collection: {e}")
         
     def get_or_create_collection(self, collection_name: str):
         """

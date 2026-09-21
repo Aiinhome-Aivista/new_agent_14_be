@@ -7,6 +7,10 @@ from models.budget import Budget
 from models.approval_queue import ApprovalQueue
 from models.uploaded_document import UploadedDocument
 from models.task_item import TaskItem
+from models.project_milestone import ProjectMilestone
+from models.project_member import ProjectMember
+from models.project_telemetry import ProjectTelemetry
+from models.integration_setting import IntegrationSetting
 from controllers.risks_controller import enrich_risk_dict
 from services.auth_service import require_roles
 
@@ -1561,6 +1565,12 @@ def get_project_team_data(project_id):
 
     # Enrich each member
     members = []
+
+    # Pre-fetch all tasks and milestones once for the project
+    all_db_tasks = db.db_session.query(TaskItem).filter_by(project_id=project.id).all() if db.db_session else []
+    p_milestones = db.db_session.query(ProjectMilestone).filter_by(project_id=project.id).order_by(ProjectMilestone.id.asc()).limit(2).all() if db.db_session else []
+    linked_ms_summary = [f"{m.milestone_code}: {m.name}" for m in p_milestones]
+
     for idx, tm in enumerate(raw_team):
         m_name = tm.get('name', f"Team Member {idx+1}")
         m_role = tm.get('role', 'Software Engineer')
@@ -1599,10 +1609,6 @@ def get_project_team_data(project_id):
         else:
             skills = ['Enterprise Software Engineering', 'System Integration', 'Git', 'Agile Delivery']
 
-        # Fetch all tasks from DB for this project
-        from models.task_item import TaskItem
-        all_db_tasks = db.db_session.query(TaskItem).filter_by(project_id=project.id).all() if db.db_session else []
-        
         # Try to match by assignee, or fallback to distributing evenly
         member_tasks = []
         for t in all_db_tasks:
@@ -1640,7 +1646,7 @@ def get_project_team_data(project_id):
             "status": "Active",
             "skills": skills,
             "assigned_tasks": assigned_tasks,
-            "linked_milestones": [f"{m.milestone_code}: {m.name}" for m in db.db_session.query(ProjectMilestone).filter_by(project_id=project.id).order_by(ProjectMilestone.id.asc()).limit(2).all()] if db.db_session else [],
+            "linked_milestones": linked_ms_summary,
             "color": get_role_color(m_role)
         })
 
@@ -1731,3 +1737,84 @@ def get_project_resource_detail(project_id, resource_id):
         "project": team_data["project"],
         "resource": target_res
     })
+
+
+@dashboard_bp.route('/forecast', methods=['GET'])
+@require_roles('Program Director')
+def get_forecast():
+    """
+    Returns dynamic forecast for Program Director using PredictiveAgent.
+    Reads live budget variance and active risks from the database,
+    then calls the PredictiveAgent's Reflexion loop for AI-driven forecasting.
+    """
+    from agents.predictive_agent.agent import PredictiveAgent
+    from models.risk_register import RiskRegister
+    from models.project import Project
+    from models.budget import Budget
+    
+    try:
+        project_id = request.args.get('project_id')
+
+        # --- Compute live financial variance from Budget table ---
+        if project_id:
+            latest_b = db.db_session.query(Budget).filter_by(project_id=int(project_id)).order_by(Budget.created_at.desc()).first()
+            total_planned = float(latest_b.planned_spend) if latest_b else 0.0
+            total_actual = float(latest_b.actual_spend) if latest_b else 0.0
+            project = db.db_session.query(Project).get(int(project_id))
+            project_status_label = f"Execution Phase ({project.name})" if project else "Execution Phase"
+        else:
+            # Cross-portfolio mode
+            total_planned = 0.0
+            total_actual = 0.0
+            all_projs = db.db_session.query(Project).all() if db.db_session else []
+            for p in all_projs:
+                p_b = db.db_session.query(Budget).filter_by(project_id=p.id).order_by(Budget.created_at.desc()).first()
+                if p_b:
+                    total_planned += float(p_b.planned_spend or 0.0)
+                    total_actual += float(p_b.actual_spend or 0.0)
+            project_status_label = "Execution Phase (Portfolio)"
+
+        current_variance = total_planned - total_actual
+
+        # --- Collect active high/critical risks ---
+        high_critical_risks = []
+        if db.db_session:
+            risk_query = db.db_session.query(RiskRegister).filter(
+                RiskRegister.status == 'Open',
+                RiskRegister.severity.in_(['High', 'Critical'])
+            )
+            if project_id:
+                risk_query = risk_query.filter(RiskRegister.project_id == int(project_id))
+            active_risks = risk_query.limit(10).all()
+            for r in active_risks:
+                high_critical_risks.append({
+                    "title": r.title,
+                    "severity": r.severity,
+                    "financial_impact": 0.0
+                })
+
+        # --- Call PredictiveAgent ---
+        agent = PredictiveAgent()
+        inputs = {
+            "current_variance": float(current_variance),
+            "risks": high_critical_risks,
+            "project_status": project_status_label
+        }
+        
+        result = agent.execute(inputs)
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                **result,
+                "total_planned": total_planned,
+                "total_actual": total_actual,
+                "current_variance": current_variance,
+                "risk_count": len(high_critical_risks)
+            }
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+

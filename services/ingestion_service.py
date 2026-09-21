@@ -46,7 +46,7 @@ class IngestionService:
         def financial_wrapper(inputs):
             intake_out = inputs.get("intake", {})
             b_rec = db.db_session.query(Budget).filter_by(project_id=project_id).first()
-            def_planned = float(b_rec.planned_spend) if b_rec else 1500000.0
+            def_planned = float(b_rec.planned_spend) if b_rec else 0.0
             def_actual = float(b_rec.actual_spend) if b_rec else 0.0
             in_pl = intake_out.get("budget_planned")
             in_ac = intake_out.get("budget_actual")

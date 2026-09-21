@@ -57,7 +57,8 @@ def list_projects():
             total_open_risks = sum(1 for r in risks if str(r.status).capitalize() == 'Open')
             
             # Health calculation
-            health_score = max(40, 95 - (crit_count * 12 + high_count * 6))
+            from controllers.dashboard_controller import calculate_dynamic_health_score
+            health_score = calculate_dynamic_health_score(p, pl_val, ac_val, risks, db.db_session)
 
             # 3. Document count
             doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=p.id).count()
@@ -163,7 +164,7 @@ def create_project():
 
         p_dict = new_project.to_dict()
         p_dict.update({
-            'health_score': 95,
+            'health_score': 100,
             'planned_spend': planned_spend,
             'actual_spend': 0.0,
             'variance': planned_spend,
@@ -200,9 +201,10 @@ def get_project(project_id):
     risks = db.db_session.query(RiskRegister).filter_by(project_id=project.id).all()
     docs = db.db_session.query(UploadedDocument).filter_by(project_id=project.id).all()
 
-    crit_count = sum(1 for r in risks if str(r.severity).capitalize() == 'Critical' and str(r.status).capitalize() == 'Open')
-    high_count = sum(1 for r in risks if str(r.severity).capitalize() == 'High' and str(r.status).capitalize() == 'Open')
-    health_score = max(40, 95 - (crit_count * 12 + high_count * 6))
+    from controllers.dashboard_controller import calculate_dynamic_health_score
+    p_pl = float(budget.planned_spend) if budget else 1000000.0
+    p_ac = float(budget.actual_spend) if budget else 0.0
+    health_score = calculate_dynamic_health_score(project, p_pl, p_ac, risks, db.db_session)
 
     res = project.to_dict()
     res.update({

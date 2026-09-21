@@ -249,6 +249,21 @@ CREATE TABLE project_telemetries (
 	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 );
 
+CREATE TABLE task_items (
+	id INTEGER NOT NULL AUTO_INCREMENT,
+	project_id INTEGER NOT NULL,
+	jira_key VARCHAR(50) NULL,
+	summary TEXT NOT NULL,
+	status VARCHAR(50) DEFAULT 'Open',
+	priority VARCHAR(50) DEFAULT 'Medium',
+	assignee VARCHAR(100) NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	INDEX idx_task_items_jira_key (jira_key),
+	FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
 -- ==========================================
 -- DEFAULT INITIAL SEED DATA
 -- ==========================================

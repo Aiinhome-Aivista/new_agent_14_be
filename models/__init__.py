@@ -12,4 +12,7 @@ from .generated_report import GeneratedReport
 from .project_member import ProjectMember
 from .project_milestone import ProjectMilestone
 from .project_telemetry import ProjectTelemetry
+from .user import User
+from .guardrail_policy import GuardrailPolicy
+from .integration_setting import IntegrationSetting
 from .task_item import TaskItem

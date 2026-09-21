@@ -61,6 +61,12 @@ def init_db(app):
                                              bind=engine))
     Base.query = db_session.query_property()
 
+    try:
+        import models
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        logger.warning(f"Error checking/creating database tables on startup: {e}")
+
     @app.teardown_appcontext
     def shutdown_session(exception=None):
         if db_session:

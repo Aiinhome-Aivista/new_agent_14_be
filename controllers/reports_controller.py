@@ -163,9 +163,9 @@ def generate_report():
             budget_planned = 1500000.0
             budget_actual = 0.0
 
-        crit_count = sum(1 for r in risks if str(r.severity).capitalize() == 'Critical' and str(r.status).capitalize() == 'Open')
-        high_count = sum(1 for r in risks if str(r.severity).capitalize() == 'High' and str(r.status).capitalize() == 'Open')
-        health_score = max(40, 95 - (crit_count * 12 + high_count * 6))
+        from controllers.dashboard_controller import calculate_dynamic_health_score
+        p_obj = db.db_session.query(Project).filter_by(id=project_id).first() if db.db_session else None
+        health_score = calculate_dynamic_health_score(p_obj, budget_planned, budget_actual, risks, db.db_session)
 
         rep_agent = ReportingAgent()
         report_result = rep_agent.execute({

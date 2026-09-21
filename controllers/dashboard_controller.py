@@ -539,6 +539,64 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
         }
     }
 
+def calculate_dynamic_health_score(active_project, total_planned, total_actual, all_risks, db_session=None):
+    """
+    Dynamically computes a 0-100 project health & delivery confidence score:
+    - Starts at 100.0 (Clean baseline)
+    - Budget Overrun: proportional penalty if actual > planned spend
+    - Risk Penalties:
+        * Open Critical risk: -15 pts
+        * Open High risk: -8 pts
+        * Open Medium risk: -3 pts
+        * Open Low risk: -1 pt
+    - Task Delivery Impediments:
+        * Blocked / Impeded tasks: -5 pts each
+    - Milestone SLA Compliance:
+        * Deductions if milestone SLA drops below 95%
+    """
+    score = 100.0
+
+    # 1. Budget Overrun Penalty (up to 35 pts)
+    if total_planned > 0 and total_actual > total_planned:
+        overrun_ratio = (total_actual - total_planned) / total_planned
+        score -= min(35.0, overrun_ratio * 50.0)
+
+    # 2. Risk Penalties
+    crit_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "Critical" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    high_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "High" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    med_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "Medium" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    low_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "Low" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    
+    score -= (crit_count * 15.0) + (high_count * 8.0) + (med_count * 3.0) + (low_count * 1.0)
+
+    # 3. Task Impediments Penalty (up to 20 pts)
+    if db_session and active_project:
+        try:
+            from models.task_item import TaskItem
+            blocked_tasks = db_session.query(TaskItem).filter(
+                TaskItem.project_id == active_project.id,
+                TaskItem.status.in_(["Blocked", "Impeded"])
+            ).count()
+            score -= min(20.0, blocked_tasks * 5.0)
+        except Exception:
+            pass
+
+    # 4. Milestone SLA Penalty
+    if db_session and active_project:
+        try:
+            from models.project_milestone import ProjectMilestone
+            milestones = db_session.query(ProjectMilestone).filter_by(project_id=active_project.id).all()
+            sla_scores = [m.sla_score for m in milestones if m.sla_score is not None]
+            if sla_scores:
+                avg_sla = sum(sla_scores) / len(sla_scores)
+                if avg_sla < 95.0:
+                    score -= (95.0 - avg_sla) * 0.4
+        except Exception:
+            pass
+
+    return max(20, min(100, round(score)))
+
+
 @dashboard_bp.route('/snapshot', methods=['GET'])
 def get_snapshot():
     # Read optional project_id query parameter
@@ -566,7 +624,7 @@ def get_snapshot():
         snap_data = {
             "name": "Enterprise Governance Suite",
             "id": "PRJ-101",
-            "healthScore": 95,
+            "healthScore": 100,
             "burndown": [],
             "milestones": [],
             "financials": {"totalBudget": 0, "spent": 0, "remaining": 0, "projectedVariance": 0}
@@ -876,7 +934,7 @@ def get_snapshot():
     ]
 
     # Dynamic KPI calculation
-    health = max(40, 95 - (len(crit_ids) * 12 + len(high_ids) * 6))
+    health = calculate_dynamic_health_score(active_project, total_planned, total_actual, all_risks, db.db_session)
     snap_data["healthScore"] = health
     snap_data["cross_project_status"] = cross_project_status_str
     snap_data["schedule_variance"] = sched_variance_str
@@ -906,7 +964,7 @@ def get_snapshot():
             },
             {
                 "title": "Overall Health",
-                "value": "100%",
+                "value": f"{health}%",
                 "trend": "neutral",
                 "trendLabel": "New Workspace"
             }
@@ -967,7 +1025,7 @@ def get_snapshot():
             )
             traj_status = "Workspace Initialized"
             snap_data["predictive"] = {
-                "confidence_score": 100,
+                "confidence_score": health,
                 "forecasted_variance": total_planned,
                 "forecast_narrative": narrative,
                 "trajectory_status": traj_status,
@@ -1160,9 +1218,6 @@ def get_project_details(project_id):
     med = [r.risk_id for r in risks if r.severity.capitalize() == 'Medium']
     low = [r.risk_id for r in risks if r.severity.capitalize() == 'Low']
 
-    # Health score calculation specific to project
-    health = max(40, 95 - (len(crit) * 12 + len(high) * 6))
-
     # Project-specific budget & burndown values queried from Budget model
     from models.budget import Budget
     budget_record = db.db_session.query(Budget).filter_by(project_id=project.id).order_by(Budget.created_at.desc()).first()
@@ -1171,10 +1226,12 @@ def get_project_details(project_id):
         actual_val = float(budget_record.actual_spend)
         cost_variance = float(budget_record.variance)
     else:
-        # Fallback if no budget recorded yet
         planned_val = 1500000.0
         actual_val = 0.0
         cost_variance = planned_val - actual_val
+
+    # Health score calculation dynamically calibrated
+    health = calculate_dynamic_health_score(project, planned_val, actual_val, risks, db.db_session)
 
     burn_pct = round((actual_val / planned_val * 100)) if planned_val > 0 else 0
     burn_rate = f"{burn_pct}% Burned"
@@ -1303,7 +1360,7 @@ def get_project_details(project_id):
         "numeric_id": project.id,
         "name": project.name,
         "status": project.status,
-        "healthScore": 100 if is_new else health,
+        "healthScore": health,
         "kpis": kpi_list,
         "burndown": burndown,
         "risks": [

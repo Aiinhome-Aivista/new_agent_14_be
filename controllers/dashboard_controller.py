@@ -746,6 +746,85 @@ def get_snapshot():
         ev_ratio = 0.0
         earned_k = 0
 
+    # Project Completion Percentage Calculation (Timeline, Tasks, or Milestones)
+    from models.project_milestone import ProjectMilestone
+    from datetime import datetime, timezone
+    
+    if active_project:
+        p_milestones = db.db_session.query(ProjectMilestone).filter_by(project_id=active_project.id).order_by(ProjectMilestone.id.asc()).all() if db.db_session else []
+    else:
+        p_milestones = db.db_session.query(ProjectMilestone).all() if db.db_session else []
+
+    ms_total = len(p_milestones)
+    ms_completed = sum(1 for m in p_milestones if (m.completion_pct or 0) >= 100 or str(m.status).lower() in ['completed', 'done', 'released', 'authorized'])
+    ms_avg_pct = round(sum(m.completion_pct or 0 for m in p_milestones) / ms_total) if ms_total > 0 else 0
+
+    task_pct = round((db_completed_tasks / db_total_tasks) * 100) if db_total_tasks > 0 else 0
+
+    # Timeline calculation (only if explicit horizon is defined in telemetry or project)
+    timeline_elapsed_months = 0
+    timeline_total_months = 0
+    timeline_pct = 0
+
+    active_telem = get_project_db_telemetry(active_project.id) if active_project else None
+    if active_telem and isinstance(active_telem, dict):
+        tl_meta = active_telem.get('timeline', {})
+        if isinstance(tl_meta, dict):
+            timeline_total_months = tl_meta.get('total_months') or 0
+            timeline_elapsed_months = tl_meta.get('elapsed_months') or 0
+
+    if timeline_total_months > 0:
+        if active_project and getattr(active_project, 'created_at', None):
+            try:
+                now_dt = datetime.now(timezone.utc)
+                c_dt = active_project.created_at
+                if c_dt.tzinfo is None:
+                    c_dt = c_dt.replace(tzinfo=timezone.utc)
+                days_diff = max(0, (now_dt - c_dt).days)
+                timeline_elapsed_months = min(timeline_total_months, max(0, round(days_diff / 30, 1)))
+                timeline_pct = min(100, round((timeline_elapsed_months / timeline_total_months) * 100))
+            except Exception:
+                pass
+
+    # Determine primary completion percentage dynamically
+    if db_total_tasks > 0:
+        comp_percentage = task_pct
+        comp_basis = "Task Backlog"
+        comp_label = f"{db_completed_tasks}/{db_total_tasks} Tasks Completed ({task_pct}%)"
+    elif ms_total > 0:
+        comp_percentage = ms_avg_pct
+        comp_basis = "Contract Milestones"
+        comp_label = f"{ms_completed}/{ms_total} Milestones Verified ({ms_avg_pct}%)"
+    elif timeline_total_months > 0 and timeline_pct > 0:
+        comp_percentage = timeline_pct
+        comp_basis = "Timeline Horizon"
+        comp_label = f"{timeline_elapsed_months}/{timeline_total_months} Months Elapsed ({timeline_pct}%)"
+    else:
+        comp_percentage = 0
+        comp_basis = "Initial Phase"
+        comp_label = "0% Project Kickoff (Awaiting SOW / Tasks)"
+
+    snap_data["completion"] = {
+        "percentage": comp_percentage,
+        "basis": comp_basis,
+        "label": comp_label,
+        "tasks": {
+            "completed": db_completed_tasks,
+            "total": db_total_tasks,
+            "percentage": task_pct
+        },
+        "milestones": {
+            "completed": ms_completed,
+            "total": ms_total,
+            "percentage": ms_avg_pct
+        },
+        "timeline": {
+            "elapsed_months": timeline_elapsed_months,
+            "total_months": timeline_total_months,
+            "percentage": timeline_pct
+        }
+    }
+
     if ac_k <= 0:
         e1 = int(earned_k * 0.28) if earned_k > 0 else 0
         snap_data["burndown"] = [
@@ -964,25 +1043,27 @@ def get_snapshot():
                 "trend": trend_val
             }
 
-        # Dynamic Milestones per project
+        # Dynamic Milestones per project from MySQL ProjectMilestone table
         snap_proj_id = snap_data.get("project_id") or snap_data.get("numeric_id")
-        has_specific_milestones = (snap_proj_id == active_project.id and "milestones" in snap_data and len(snap_data.get("milestones", [])) > 0)
-        if not has_specific_milestones:
-            m_quarter = int(total_planned / 4)
-            if is_new_project:
-                snap_data["milestones"] = [
-                    {"id": "M-01", "name": f"{active_project.name} - Architecture & Blueprint", "timeline": "Sprint 1-2", "status": "Scheduled", "trancheAmount": m_quarter, "slaScore": 100, "deliverablesPercent": 0},
-                    {"id": "M-02", "name": f"{active_project.name} - Core Implementation", "timeline": "Sprint 3-4", "status": "Scheduled", "trancheAmount": m_quarter, "slaScore": None, "deliverablesPercent": 0},
-                    {"id": "M-03", "name": f"{active_project.name} - Integration & Verification", "timeline": "Sprint 5", "status": "Scheduled", "trancheAmount": m_quarter, "slaScore": None, "deliverablesPercent": 0},
-                    {"id": "M-04", "name": f"{active_project.name} - Production Cutover & Handover", "timeline": "Sprint 6", "status": "Locked", "trancheAmount": m_quarter, "slaScore": None, "deliverablesPercent": 0}
-                ]
-            else:
-                snap_data["milestones"] = [
-                    {"id": "M-01", "name": f"{active_project.name} - Architecture & Blueprint", "timeline": "Sprint 1-2", "status": "Released" if total_actual > 0 else "Authorized", "trancheAmount": m_quarter, "slaScore": 98, "deliverablesPercent": 100},
-                    {"id": "M-02", "name": f"{active_project.name} - Core Implementation", "timeline": "Sprint 3-4", "status": "In Progress" if total_actual > 0 else "Authorized", "trancheAmount": m_quarter, "slaScore": 92 if len(crit_ids) == 0 else 74, "deliverablesPercent": 60},
-                    {"id": "M-03", "name": f"{active_project.name} - Integration & Verification", "timeline": "Sprint 5", "status": "On Hold" if len(crit_ids) > 0 else "Authorized", "trancheAmount": m_quarter, "slaScore": 75 if len(crit_ids) > 0 else 90, "deliverablesPercent": 30},
-                    {"id": "M-04", "name": f"{active_project.name} - Production Cutover & Handover", "timeline": "Sprint 6", "status": "Locked", "trancheAmount": m_quarter, "slaScore": None, "deliverablesPercent": 0}
-                ]
+        p_db_milestones = db.db_session.query(ProjectMilestone).filter_by(project_id=active_project.id).order_by(ProjectMilestone.id.asc()).all() if db.db_session else []
+        if p_db_milestones:
+            snap_data["milestones"] = [
+                {
+                    "id": m.milestone_code,
+                    "numeric_id": m.id,
+                    "name": m.name,
+                    "description": m.description or "",
+                    "timeline": m.target_date or "TBD",
+                    "status": m.status or "Scheduled",
+                    "trancheAmount": m.tranche_amount or 0,
+                    "slaScore": m.sla_score,
+                    "deliverablesPercent": m.completion_pct or 0
+                } for m in p_db_milestones
+            ]
+        elif active_telem and active_telem.get('milestones'):
+            snap_data["milestones"] = active_telem['milestones']
+        else:
+            snap_data["milestones"] = []
     else:
         # Cross-project mode
         snap_data["predictive"] = {
@@ -1267,29 +1348,111 @@ def get_project_details(project_id):
     doc_telemetry = get_project_db_telemetry(project.id)
     doc_milestones = doc_telemetry.get('milestones', []) if doc_telemetry else []
 
-    phases = doc_milestones if doc_milestones else [
-        {"id": "PH-01", "name": f"{project.name} - Architecture & SOW Sign-off", "target_date": "Oct 15, 2026", "status": "Completed", "completion_pct": 100, "days_left": 0},
-        {"id": "PH-02", "name": f"{project.name} - Core Service Dev & Data Pipeline", "target_date": "Nov 02, 2026", "status": "In Progress", "completion_pct": 65, "days_left": 18},
-        {"id": "PH-03", "name": f"{project.name} - Integration & Security Compliance", "target_date": "Nov 18, 2026", "status": "In Progress", "completion_pct": 35, "days_left": 34},
-        {"id": "PH-04", "name": f"{project.name} - UAT & Regulatory Clearance Gate", "target_date": "Nov 28, 2026", "status": "Scheduled", "completion_pct": 0, "days_left": 44},
-        {"id": "PH-05", "name": f"{project.name} - Production Cutover & Handover", "target_date": "Dec 15, 2026", "status": "Scheduled", "completion_pct": 0, "days_left": 61}
-    ]
+    # Milestones strictly from MySQL ProjectMilestone table or ingested document telemetry
+    from models.project_milestone import ProjectMilestone
+    from datetime import datetime, timezone
+
+    p_milestones = db.db_session.query(ProjectMilestone).filter_by(project_id=project.id).order_by(ProjectMilestone.id.asc()).all() if db.db_session else []
+
+    phases = []
+    if p_milestones:
+        for ms in p_milestones:
+            phases.append({
+                "id": ms.milestone_code,
+                "numeric_id": ms.id,
+                "name": ms.name,
+                "description": ms.description or "",
+                "target_date": ms.target_date or "TBD",
+                "status": ms.status or "Scheduled",
+                "completion_pct": ms.completion_pct if ms.completion_pct is not None else 0,
+                "days_left": ms.days_left if ms.days_left is not None else 0,
+                "tranche_amount": ms.tranche_amount or 0.0,
+                "sla_score": ms.sla_score,
+                "sla_status": ms.sla_status or "Scheduled"
+            })
+    elif doc_milestones:
+        phases = doc_milestones
+    else:
+        phases = []
+
+    target_completion_date = phases[-1].get("target_date", "Pending SOW") if phases else "Pending SOW"
+    days_rem = sum(p.get("days_left", 0) for p in phases) if phases else 0
 
     project_data["timeline_summary"] = {
-        "target_completion_date": "November 28, 2026" if not is_new else "Pending SOW",
-        "days_remaining": 74 if not is_new else 0,
-        "spi": 1.02 if not is_new else 1.00,
-        "schedule_status": "Governed by Project Charter & SOW" if not is_new else "New Workspace",
+        "target_completion_date": target_completion_date if not is_new else "Pending SOW",
+        "days_remaining": days_rem,
+        "spi": 1.00 if (is_new or len(phases) == 0) else 1.02,
+        "schedule_status": "Governed by Project Charter & SOW" if (not is_new and len(phases) > 0) else "New Workspace (Awaiting SOW)",
         "phases": phases
     }
 
-    project_data["governance_summary"] = {
-        "vendor_sla_adherence": 100.0,
-        "compliance_audit_score": 100,
-        "open_escalations": len(crit),
-        "gate_clearance_status": "Gate 3 Approved" if not is_new else "Gate 1 Initialized",
-        "contractual_sow_baseline": "Verified Against Active Charter",
-        "rate_card_guardrails": "Autonomous Compliance Enforced"
+    # Project Completion Summary (Multi-vector: Tasks, Milestones, Timeline)
+    ms_total = len(phases)
+    ms_completed = sum(1 for p in phases if (p.get('completion_pct', 0) or 0) >= 100 or str(p.get('status')).lower() in ['completed', 'done', 'released', 'authorized'])
+    ms_avg_pct = round(sum((p.get('completion_pct', 0) or 0) for p in phases) / ms_total) if ms_total > 0 else 0
+
+    task_pct = round((db_completed / db_total) * 100) if db_total > 0 else 0
+
+    # Timeline calculation
+    timeline_elapsed_months = 0
+    timeline_total_months = 0
+    timeline_pct = 0
+
+    if doc_telemetry and isinstance(doc_telemetry, dict):
+        tl_meta = doc_telemetry.get('timeline', {})
+        if isinstance(tl_meta, dict):
+            timeline_total_months = tl_meta.get('total_months') or 0
+            timeline_elapsed_months = tl_meta.get('elapsed_months') or 0
+
+    if timeline_total_months > 0:
+        if getattr(project, 'created_at', None):
+            try:
+                now_dt = datetime.now(timezone.utc)
+                c_dt = project.created_at
+                if c_dt.tzinfo is None:
+                    c_dt = c_dt.replace(tzinfo=timezone.utc)
+                days_diff = max(0, (now_dt - c_dt).days)
+                timeline_elapsed_months = min(timeline_total_months, max(0, round(days_diff / 30, 1)))
+                timeline_pct = min(100, round((timeline_elapsed_months / timeline_total_months) * 100))
+            except Exception:
+                pass
+
+    if db_total > 0:
+        overall_comp = task_pct
+        comp_basis = "Task Backlog"
+        comp_sub = f"{db_completed}/{db_total} Tasks ({task_pct}%)"
+    elif ms_total > 0:
+        overall_comp = ms_avg_pct
+        comp_basis = "Contract Milestones"
+        comp_sub = f"{ms_completed}/{ms_total} Milestones ({ms_avg_pct}%)"
+    elif timeline_total_months > 0 and timeline_pct > 0:
+        overall_comp = timeline_pct
+        comp_basis = "Timeline Horizon"
+        comp_sub = f"{timeline_elapsed_months}/{timeline_total_months} Months ({timeline_pct}%)"
+    else:
+        overall_comp = 0
+        comp_basis = "Initial Phase"
+        comp_sub = "0% Initial Phase (Awaiting SOW / Task Ingestion)"
+
+    project_data["completion_summary"] = {
+        "percentage": overall_comp,
+        "basis": comp_basis,
+        "label": comp_sub,
+        "tasks": {
+            "completed": db_completed,
+            "total": db_total,
+            "percentage": task_pct
+        },
+        "milestones": {
+            "completed": ms_completed,
+            "total": ms_total,
+            "percentage": ms_avg_pct
+        },
+        "timeline": {
+            "elapsed_months": timeline_elapsed_months,
+            "total_months": timeline_total_months,
+            "percentage": timeline_pct
+        }
     }
 
     return jsonify(project_data)
@@ -1420,7 +1583,7 @@ def get_project_team_data(project_id):
             "status": "Active",
             "skills": skills,
             "assigned_tasks": assigned_tasks,
-            "linked_milestones": ["PH-01: Architecture Sign-off", "PH-02: Core Service Dev"],
+            "linked_milestones": [f"{m.milestone_code}: {m.name}" for m in db.db_session.query(ProjectMilestone).filter_by(project_id=project.id).order_by(ProjectMilestone.id.asc()).limit(2).all()] if db.db_session else [],
             "color": get_role_color(m_role)
         })
 

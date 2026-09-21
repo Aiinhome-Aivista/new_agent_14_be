@@ -128,7 +128,7 @@ class IntakeAgent:
             
             # Simple heuristic extraction from text
             budget_matches = re.findall(r'\$?([\d,]+(?:\.\d+)?)\s*(?:M|k|million|thousand)?', document_text, re.IGNORECASE)
-            planned = 1500000.0
+            planned = 0.0
             actual = 0.0
             
             detected_risks = []
@@ -152,11 +152,11 @@ class IntakeAgent:
                             "id": f"M-0{m_count}",
                             "name": m_name,
                             "timeline": f"Phase {m_count}",
-                            "status": "Released" if m_count == 1 else ("On Hold" if m_count == 3 else "Authorized"),
-                            "trancheAmount": 350000.0 if m_count == 1 else (450000.0 if m_count == 2 else (300000.0 if m_count == 3 else 400000.0)),
-                            "deliverablesPercent": 100 if m_count == 1 else (60 if m_count == 3 else 75),
-                            "slaScore": 98 if m_count == 1 else (74 if m_count == 3 else 94),
-                            "slaStatus": "Compliant" if m_count != 3 else "Breached"
+                            "status": "Scheduled",
+                            "trancheAmount": 0.0,
+                            "deliverablesPercent": 0,
+                            "slaScore": None,
+                            "slaStatus": "Scheduled"
                         })
                 
             from models.project import Project

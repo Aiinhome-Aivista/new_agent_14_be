@@ -92,17 +92,52 @@ class ReportingAgent:
         """
         doc = docx.Document()
         section = doc.sections[0]
-        section.top_margin = Inches(0.75)
-        section.bottom_margin = Inches(0.75)
-        section.left_margin = Inches(0.75)
-        section.right_margin = Inches(0.75)
+        section.top_margin = Inches(0.5)
+        section.bottom_margin = Inches(0.5)
+        section.left_margin = Inches(0.5)
+        section.right_margin = Inches(0.5)
+
+        # Running Header
+        header = section.header
+        p_head = header.paragraphs[0]
+        p_head.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        p_head.paragraph_format.space_after = Pt(2)
+        r_h1 = p_head.add_run("VPM PLATFORM  |  Autonomous Executive Briefing & Program Intelligence    ")
+        r_h1.font.name = "Calibri"
+        r_h1.font.size = Pt(7.5)
+        r_h1.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+        r_h2 = p_head.add_run("RESTRICTED // BOARD LEVEL")
+        r_h2.font.name = "Calibri"
+        r_h2.font.size = Pt(7.5)
+        r_h2.font.bold = True
+        r_h2.font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
+
+        # Running Footer
+        footer = section.footer
+        p_foot = footer.paragraphs[0]
+        r_f1 = p_foot.add_run("VPM PLATFORM  ")
+        r_f1.font.name = "Calibri"
+        r_f1.font.size = Pt(7.5)
+        r_f1.font.bold = True
+        r_f1.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
+        r_f2 = p_foot.add_run("•  Autonomous Delivery Intelligence  •  SOC2 Type II Attested  •  Strict Board Confidentiality")
+        r_f2.font.name = "Calibri"
+        r_f2.font.size = Pt(7.5)
+        r_f2.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
         def set_cell_bg(cell, hex_color):
+            tcPr = cell._tc.get_or_add_tcPr()
+            for child in list(tcPr):
+                if child.tag.endswith('shd'):
+                    tcPr.remove(child)
             shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{hex_color}"/>')
-            cell._tc.get_or_add_tcPr().append(shd)
+            tcPr.append(shd)
 
         def set_cell_border(cell, **kwargs):
             tcPr = cell._tc.get_or_add_tcPr()
+            for child in list(tcPr):
+                if child.tag.endswith('tcBorders'):
+                    tcPr.remove(child)
             tcBorders = parse_xml(f'<w:tcBorders {nsdecls("w")}/>')
             for border_name in ['top', 'left', 'bottom', 'right']:
                 if border_name in kwargs:
@@ -117,18 +152,44 @@ class ReportingAgent:
                     tcBorders.append(b_xml)
             tcPr.append(tcBorders)
 
-        project_id = context_data.get("project_id", 101)
-        project_name = context_data.get("project_name", "Alpha Core Cloud Modernization")
-        health_score = context_data.get("health_score", 95)
-        planned = context_data.get("planned", 1500000.0)
-        actual = context_data.get("actual", 1200000.0)
-        variance = context_data.get("variance", 300000.0)
-        burn_pct = context_data.get("burn_pct", 80.0)
+        def set_table_widths(tbl, widths_in_inches):
+            tbl.autofit = False
+            tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+            tblPr = tbl._tbl.tblPr
+            for child in list(tblPr):
+                if child.tag.endswith('tblpPr') or child.tag.endswith('tblW'):
+                    tblPr.remove(child)
+            total_dxa = int(sum(widths_in_inches) * 1440)
+            tblW = parse_xml(f'<w:tblW {nsdecls("w")} w:w="{total_dxa}" w:type="dxa"/>')
+            tblPr.append(tblW)
+
+            for row in tbl.rows:
+                for idx, w in enumerate(widths_in_inches):
+                    if idx < len(row.cells):
+                        cell = row.cells[idx]
+                        cell.width = Inches(w)
+                        cell_dxa = int(w * 1440)
+                        tcPr = cell._tc.get_or_add_tcPr()
+                        for child in list(tcPr):
+                            if child.tag.endswith('tcW'):
+                                tcPr.remove(child)
+                        tcW = parse_xml(f'<w:tcW {nsdecls("w")} w:w="{cell_dxa}" w:type="dxa"/>')
+                        tcPr.append(tcW)
+                        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+        project_id = context_data.get("project_id", 1)
+        project_name = context_data.get("project_name") or f"Project #{project_id}"
+        health_score = context_data.get("health_score", 0)
+        planned = float(context_data.get("planned", 0.0) or 0.0)
+        actual = float(context_data.get("actual", 0.0) or 0.0)
+        variance = float(context_data.get("variance", 0.0) or 0.0)
+        burn_pct = float(context_data.get("burn_pct", 0.0) or 0.0)
         narrative = context_data.get("narrative", "")
         critical_items = context_data.get("critical_items", [])
         high_items = context_data.get("high_items", [])
         risks_list = context_data.get("risks_list", [])
         rep_id = context_data.get("rep_id", 1001)
+        raw_milestones = context_data.get("milestones", [])
 
         # 1. HEADER BANNER
         p_brand = doc.add_paragraph()
@@ -159,8 +220,8 @@ class ReportingAgent:
         r_sub.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
         # Metadata Header Box
-        meta_table = doc.add_table(rows=2, cols=2)
-        meta_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        meta_table = doc.add_table(rows=1, cols=2)
+        meta_table.alignment = WD_TABLE_ALIGNMENT.LEFT
         now_str = datetime.now().strftime("%b %d, %Y • %H:%M UTC")
 
         left_data = [
@@ -216,19 +277,20 @@ class ReportingAgent:
             else:
                 r2.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
-        meta_table._tbl.remove(meta_table.rows[1]._tr)
-        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        set_table_widths(meta_table, [3.75, 3.75])
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 2. EXECUTIVE SUMMARY & NARRATIVE
         h1 = doc.add_paragraph()
-        h1.paragraph_format.space_before = Pt(10)
-        h1.paragraph_format.space_after = Pt(3)
+        h1.paragraph_format.space_before = Pt(8)
+        h1.paragraph_format.space_after = Pt(2)
         r_h1 = h1.add_run("1. Executive Strategic Narrative")
         r_h1.font.bold = True
-        r_h1.font.size = Pt(11.5)
+        r_h1.font.size = Pt(11)
         r_h1.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
         callout_tbl = doc.add_table(rows=1, cols=1)
+        callout_tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
         c_cell = callout_tbl.cell(0, 0)
         set_cell_bg(c_cell, "FFF7ED")
         set_cell_border(c_cell, left=dict(sz="24", color="FF5A14"), top=dict(sz="4", color="FFEDD5"), bottom=dict(sz="4", color="FFEDD5"), right=dict(sz="4", color="FFEDD5"))
@@ -244,19 +306,20 @@ class ReportingAgent:
         r_narr.font.size = Pt(9)
         r_narr.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        set_table_widths(callout_tbl, [7.5])
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 3. EXECUTIVE KPI DASHBOARD SCORECARD
         h2 = doc.add_paragraph()
         h2.paragraph_format.space_before = Pt(8)
-        h2.paragraph_format.space_after = Pt(3)
+        h2.paragraph_format.space_after = Pt(2)
         r_h2 = h2.add_run("2. Program Health & Velocity KPIs")
         r_h2.font.bold = True
-        r_h2.font.size = Pt(11.5)
+        r_h2.font.size = Pt(11)
         r_h2.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
         kpi_table = doc.add_table(rows=5, cols=4)
-        kpi_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        kpi_table.alignment = WD_TABLE_ALIGNMENT.LEFT
 
         kpi_headers = ["KPI Indicator", "Score / Metric", "Sprint Trajectory", "Operational Governance Status"]
         for c_idx, title in enumerate(kpi_headers):
@@ -264,9 +327,11 @@ class ReportingAgent:
             set_cell_bg(cell, "1E293B")
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER if c_idx > 0 else WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
             r = p.add_run(title)
             r.font.bold = True
-            r.font.size = Pt(8.5)
+            r.font.size = Pt(8)
             r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
         kpi_rows = [
@@ -284,42 +349,51 @@ class ReportingAgent:
                 set_cell_border(c, bottom=dict(sz="4", color="E2E8F0"))
 
             p0 = cells[0].paragraphs[0]
+            p0.paragraph_format.space_before = Pt(3)
+            p0.paragraph_format.space_after = Pt(3)
             r0 = p0.add_run(m_name)
             r0.font.bold = True
-            r0.font.size = Pt(8.5)
+            r0.font.size = Pt(8)
             r0.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
             p1 = cells[1].paragraphs[0]
             p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p1.paragraph_format.space_before = Pt(3)
+            p1.paragraph_format.space_after = Pt(3)
             r1 = p1.add_run(m_val)
             r1.font.bold = True
-            r1.font.size = Pt(8.5)
+            r1.font.size = Pt(8)
             r1.font.color.rgb = RGBColor(0x05, 0x96, 0x69) if (health_score >= 80 and r_idx == 1) else RGBColor(0x0F, 0x17, 0x2A)
 
             p2 = cells[2].paragraphs[0]
             p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p2.paragraph_format.space_before = Pt(3)
+            p2.paragraph_format.space_after = Pt(3)
             r2 = p2.add_run(m_trend)
-            r2.font.size = Pt(8.5)
+            r2.font.size = Pt(8)
             r2.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
             p3 = cells[3].paragraphs[0]
+            p3.paragraph_format.space_before = Pt(3)
+            p3.paragraph_format.space_after = Pt(3)
             r3 = p3.add_run(m_status)
-            r3.font.size = Pt(8.5)
+            r3.font.size = Pt(8)
             r3.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        set_table_widths(kpi_table, [1.9, 1.5, 1.6, 2.5])
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 4. FINANCIAL GOVERNANCE & BUDGET VARIANCE
         h3 = doc.add_paragraph()
         h3.paragraph_format.space_before = Pt(8)
-        h3.paragraph_format.space_after = Pt(3)
+        h3.paragraph_format.space_after = Pt(2)
         r_h3 = h3.add_run("3. Financial Governance & Cost Breakdown")
         r_h3.font.bold = True
-        r_h3.font.size = Pt(11.5)
+        r_h3.font.size = Pt(11)
         r_h3.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
         fin_table = doc.add_table(rows=4, cols=6)
-        fin_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        fin_table.alignment = WD_TABLE_ALIGNMENT.LEFT
 
         fin_headers = ["Expense Stream", "Allocated Budget", "Actual Invoiced", "Net Variance ($)", "Burn Rate", "Governance Status"]
         for c_idx, title in enumerate(fin_headers):
@@ -327,9 +401,11 @@ class ReportingAgent:
             set_cell_bg(cell, "1E293B")
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER if c_idx > 0 else WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
             r = p.add_run(title)
             r.font.bold = True
-            r.font.size = Pt(8.5)
+            r.font.size = Pt(8)
             r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
         capex_plan = planned * 0.75
@@ -339,9 +415,12 @@ class ReportingAgent:
         opex_act = actual * 0.28
         opex_var = opex_plan - opex_act
 
+        capex_burn_str = f"{(capex_act/capex_plan*100):.1f}%" if capex_plan > 0 else "0.0%"
+        opex_burn_str = f"{(opex_act/opex_plan*100):.1f}%" if opex_plan > 0 else "0.0%"
+
         fin_data = [
-            ("CapEx Infrastructure & Licenses", f"${capex_plan:,.0f}", f"${capex_act:,.0f}", f"+${capex_var:,.0f}", f"{(capex_act/capex_plan*100):.1f}%", "Approved & Verified"),
-            ("OpEx Engineering & Contractor SOW", f"${opex_plan:,.0f}", f"${opex_act:,.0f}", f"+${opex_var:,.0f}", f"{(opex_act/opex_plan*100):.1f}%", "Compliant with PO"),
+            ("CapEx Infrastructure & Licenses", f"${capex_plan:,.0f}", f"${capex_act:,.0f}", f"+${capex_var:,.0f}", capex_burn_str, "Approved & Verified"),
+            ("OpEx Engineering & Contractor SOW", f"${opex_plan:,.0f}", f"${opex_act:,.0f}", f"+${opex_var:,.0f}", opex_burn_str, "Compliant with PO"),
             ("Consolidated Program Total", f"${planned:,.0f}", f"${actual:,.0f}", f"{'+' if variance >= 0 else '-'}${abs(variance):,.0f}", f"{burn_pct:.1f}%", "Runway Preserved" if variance >= 0 else "Overrun Detected")
         ]
 
@@ -354,9 +433,11 @@ class ReportingAgent:
                 set_cell_border(c, bottom=dict(sz="6" if is_tot else "4", color="94A3B8" if is_tot else "E2E8F0"))
                 p = c.paragraphs[0]
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER if i in [1, 2, 3, 4] else (WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT)
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(3)
                 r = p.add_run(row_vals[i])
                 r.font.bold = is_tot
-                r.font.size = Pt(8.5)
+                r.font.size = Pt(8)
                 if i == 3 and not is_tot:
                     r.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
                 elif is_tot:
@@ -364,35 +445,45 @@ class ReportingAgent:
                 else:
                     r.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        set_table_widths(fin_table, [2.1, 1.1, 1.1, 1.1, 0.9, 1.2])
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 5. DELIVERY MILESTONES
         h4 = doc.add_paragraph()
         h4.paragraph_format.space_before = Pt(8)
-        h4.paragraph_format.space_after = Pt(3)
+        h4.paragraph_format.space_after = Pt(2)
         r_h4 = h4.add_run("4. Milestone Trajectory & SOW Commitments")
         r_h4.font.bold = True
-        r_h4.font.size = Pt(11.5)
+        r_h4.font.size = Pt(11)
         r_h4.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
-        milestone_data = [
-            ("M-01", "Architecture Blueprint & Core Migration Baseline", "Completed", "$350,000", "Sign-Off Passed"),
-            ("M-02", "Azure / Jira Bi-Directional Integration Pipeline", "Completed", "$450,000", "Verified Live"),
-            ("M-03", "Payment Gateway & SAP S/4HANA Ledger Sync", "In Progress", "$300,000", "On Track (88% Velocity)"),
-            ("M-04", "Security Hardening, Compliance Audit & Cutover", "Scheduled", "$400,000", "Target Sprint 6")
-        ]
+        milestone_data = []
+        if raw_milestones and isinstance(raw_milestones, list):
+            for idx, m in enumerate(raw_milestones):
+                m_id = str(m.get("id") or m.get("milestone_code") or f"M-0{idx+1}")
+                m_scope = str(m.get("name") or "Milestone Scope")
+                m_stat = str(m.get("status") or "Scheduled")
+                m_amt = float(m.get("trancheAmount") or m.get("tranche_amount") or m.get("amount") or 0.0)
+                m_val = f"${m_amt:,.0f}" if m_amt > 0 else "$0"
+                m_feed = str(m.get("slaStatus") or m.get("sla_status") or m.get("audit") or "Recorded")
+                milestone_data.append((m_id, m_scope, m_stat, m_val, m_feed))
+
+        if not milestone_data:
+            milestone_data = [("N/A", "No contractual milestones recorded for this project", "N/A", "$0", "N/A")]
 
         m_table = doc.add_table(rows=len(milestone_data) + 1, cols=5)
-        m_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        m_table.alignment = WD_TABLE_ALIGNMENT.LEFT
         m_headers = ["Milestone ID", "Deliverable Scope", "Status", "Tranche Value", "Audit Feedback"]
         for c_idx, title in enumerate(m_headers):
             cell = m_table.cell(0, c_idx)
             set_cell_bg(cell, "1E293B")
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER if c_idx in [0, 2, 3] else WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
             r = p.add_run(title)
             r.font.bold = True
-            r.font.size = Pt(8.5)
+            r.font.size = Pt(8)
             r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
         for r_idx, (m_id, m_scope, m_stat, m_val, m_feed) in enumerate(milestone_data, start=1):
@@ -404,21 +495,27 @@ class ReportingAgent:
 
             p0 = cells[0].paragraphs[0]
             p0.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p0.paragraph_format.space_before = Pt(3)
+            p0.paragraph_format.space_after = Pt(3)
             r0 = p0.add_run(m_id)
             r0.font.bold = True
-            r0.font.size = Pt(8.5)
+            r0.font.size = Pt(8)
             r0.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
             p1 = cells[1].paragraphs[0]
+            p1.paragraph_format.space_before = Pt(3)
+            p1.paragraph_format.space_after = Pt(3)
             r1 = p1.add_run(m_scope)
-            r1.font.size = Pt(8.5)
+            r1.font.size = Pt(8)
             r1.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
             p2 = cells[2].paragraphs[0]
             p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p2.paragraph_format.space_before = Pt(3)
+            p2.paragraph_format.space_after = Pt(3)
             r2 = p2.add_run(m_stat)
             r2.font.bold = True
-            r2.font.size = Pt(8.5)
+            r2.font.size = Pt(8)
             if m_stat == "Completed":
                 r2.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
             elif m_stat == "In Progress":
@@ -428,38 +525,45 @@ class ReportingAgent:
 
             p3 = cells[3].paragraphs[0]
             p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p3.paragraph_format.space_before = Pt(3)
+            p3.paragraph_format.space_after = Pt(3)
             r3 = p3.add_run(m_val)
-            r3.font.size = Pt(8.5)
+            r3.font.size = Pt(8)
             r3.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
             p4 = cells[4].paragraphs[0]
+            p4.paragraph_format.space_before = Pt(3)
+            p4.paragraph_format.space_after = Pt(3)
             r4 = p4.add_run(m_feed)
-            r4.font.size = Pt(8.5)
+            r4.font.size = Pt(8)
             r4.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        set_table_widths(m_table, [1.1, 2.7, 1.1, 1.2, 1.4])
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 6. RISK REGISTER & SHOWSTOPPERS
         h5 = doc.add_paragraph()
         h5.paragraph_format.space_before = Pt(8)
-        h5.paragraph_format.space_after = Pt(3)
+        h5.paragraph_format.space_after = Pt(2)
         r_h5 = h5.add_run("5. Risk Register Highlights & Mitigation Controls")
         r_h5.font.bold = True
-        r_h5.font.size = Pt(11.5)
+        r_h5.font.size = Pt(11)
         r_h5.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
         if risks_list and len(risks_list) > 0:
             r_table = doc.add_table(rows=min(len(risks_list) + 1, 8), cols=5)
-            r_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            r_table.alignment = WD_TABLE_ALIGNMENT.LEFT
             r_headers = ["Risk ID", "Risk Title / Threat", "Severity", "Mitigation Strategy", "Status"]
             for c_idx, title in enumerate(r_headers):
                 cell = r_table.cell(0, c_idx)
                 set_cell_bg(cell, "1E293B")
                 p = cell.paragraphs[0]
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER if c_idx in [0, 2, 4] else WD_ALIGN_PARAGRAPH.LEFT
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(3)
                 r = p.add_run(title)
                 r.font.bold = True
-                r.font.size = Pt(8.5)
+                r.font.size = Pt(8)
                 r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
             for r_idx, r_item in enumerate(risks_list[:7], start=1):
@@ -475,22 +579,28 @@ class ReportingAgent:
 
                 p0 = cells[0].paragraphs[0]
                 p0.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p0.paragraph_format.space_before = Pt(3)
+                p0.paragraph_format.space_after = Pt(3)
                 r0 = p0.add_run(str(r_item.get("risk_id", f"RSK-{r_idx:03d}")))
                 r0.font.bold = True
-                r0.font.size = Pt(8.5)
+                r0.font.size = Pt(8)
                 r0.font.color.rgb = RGBColor(0x99, 0x1B, 0x1B) if is_crit else RGBColor(0x0F, 0x17, 0x2A)
 
                 p1 = cells[1].paragraphs[0]
+                p1.paragraph_format.space_before = Pt(3)
+                p1.paragraph_format.space_after = Pt(3)
                 r1 = p1.add_run(str(r_item.get("title", "Delivery Threat")))
                 r1.font.bold = is_crit
-                r1.font.size = Pt(8.5)
+                r1.font.size = Pt(8)
                 r1.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
                 p2 = cells[2].paragraphs[0]
                 p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p2.paragraph_format.space_before = Pt(3)
+                p2.paragraph_format.space_after = Pt(3)
                 r2 = p2.add_run(sev.upper())
                 r2.font.bold = True
-                r2.font.size = Pt(8)
+                r2.font.size = Pt(7.5)
                 if is_crit:
                     r2.font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
                 elif is_high:
@@ -499,35 +609,43 @@ class ReportingAgent:
                     r2.font.color.rgb = RGBColor(0x02, 0x84, 0xC7)
 
                 p3 = cells[3].paragraphs[0]
+                p3.paragraph_format.space_before = Pt(3)
+                p3.paragraph_format.space_after = Pt(3)
                 r3 = p3.add_run(str(r_item.get("mitigation", r_item.get("action", "Standard mitigation playbook applied"))))
-                r3.font.size = Pt(8.5)
+                r3.font.size = Pt(8)
                 r3.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
                 p4 = cells[4].paragraphs[0]
                 p4.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p4.paragraph_format.space_before = Pt(3)
+                p4.paragraph_format.space_after = Pt(3)
                 r4 = p4.add_run(str(r_item.get("status", "Open")))
-                r4.font.size = Pt(8.5)
+                r4.font.size = Pt(8)
                 r4.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
+
+            set_table_widths(r_table, [1.0, 2.2, 1.0, 2.3, 1.0])
         else:
             p_no_risk = doc.add_paragraph()
+            p_no_risk.paragraph_format.space_before = Pt(2)
+            p_no_risk.paragraph_format.space_after = Pt(2)
             r_nr = p_no_risk.add_run("✓ Zero active critical blockers detected across current sprint cadence.")
             r_nr.font.bold = True
-            r_nr.font.size = Pt(9)
+            r_nr.font.size = Pt(8.5)
             r_nr.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(6)
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 7. GOVERNANCE COMPLIANCE & CRYPTOGRAPHIC ATTESTATION
         h6 = doc.add_paragraph()
         h6.paragraph_format.space_before = Pt(8)
-        h6.paragraph_format.space_after = Pt(3)
+        h6.paragraph_format.space_after = Pt(2)
         r_h6 = h6.add_run("6. Governance Compliance & Autonomous Sign-Off")
         r_h6.font.bold = True
-        r_h6.font.size = Pt(11.5)
+        r_h6.font.size = Pt(11)
         r_h6.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
         sign_table = doc.add_table(rows=1, cols=2)
-        sign_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        sign_table.alignment = WD_TABLE_ALIGNMENT.LEFT
 
         c_s1 = sign_table.cell(0, 0)
         set_cell_bg(c_s1, "F8FAFC")
@@ -538,7 +656,7 @@ class ReportingAgent:
         p_s1.paragraph_format.line_spacing = 1.15
         r_s1_head = p_s1.add_run("AUTONOMOUS VERIFICATION PROVENANCE:\n")
         r_s1_head.font.bold = True
-        r_s1_head.font.size = Pt(8.5)
+        r_s1_head.font.size = Pt(8)
         r_s1_head.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
         r_s1_body = p_s1.add_run(
             "• Digital Attestation: SHA-256 Verified\n"
@@ -558,7 +676,7 @@ class ReportingAgent:
         p_s2.paragraph_format.line_spacing = 1.15
         r_s2_head = p_s2.add_run("EXECUTIVE SIGN-OFF & CIRCULATION APPROVAL:\n")
         r_s2_head.font.bold = True
-        r_s2_head.font.size = Pt(8.5)
+        r_s2_head.font.size = Pt(8)
         r_s2_head.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
         r_s2_body = p_s2.add_run(
             f"Authorized Role: Program Management Office (PMO)\n"
@@ -568,6 +686,8 @@ class ReportingAgent:
         )
         r_s2_body.font.size = Pt(8)
         r_s2_body.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+
+        set_table_widths(sign_table, [3.75, 3.75])
 
         doc.save(docx_path)
 
@@ -580,17 +700,18 @@ class ReportingAgent:
         milestone matrix, risk register highlights, and governance sign-off attestation.
         """
         project_id = context_data.get("project_id", 1)
-        project_name = context_data.get("project_name", "Alpha Core Cloud Modernization")
-        health_score = context_data.get("health_score", 95)
-        planned = float(context_data.get("planned", 1500000.0) or 1500000.0)
-        actual = float(context_data.get("actual", 1200000.0) or 1200000.0)
-        variance = float(context_data.get("variance", 300000.0) or 300000.0)
-        burn_pct = float(context_data.get("burn_pct", 80.0) or 80.0)
-        narrative = context_data.get("narrative", "Executive program delivery summary...")
+        project_name = context_data.get("project_name") or f"Project #{project_id}"
+        health_score = context_data.get("health_score", 0)
+        planned = float(context_data.get("planned", 0.0) or 0.0)
+        actual = float(context_data.get("actual", 0.0) or 0.0)
+        variance = float(context_data.get("variance", 0.0) or 0.0)
+        burn_pct = float(context_data.get("burn_pct", 0.0) or 0.0)
+        narrative = context_data.get("narrative", "")
         critical_items = context_data.get("critical_items", [])
         high_items = context_data.get("high_items", [])
         risks_list = context_data.get("risks_list", [])
         rep_id = context_data.get("rep_id", 1001)
+        raw_milestones = context_data.get("milestones", [])
 
         pdf_doc = SimpleDocTemplate(
             pdf_path,
@@ -813,7 +934,7 @@ class ReportingAgent:
                 Paragraph(f"${capex_plan:,.0f}", cell_body_center),
                 Paragraph(f"${capex_act:,.0f}", cell_body_center),
                 Paragraph(f"<font color='#059669'>+${capex_var:,.0f}</font>", cell_body_center),
-                Paragraph(f"{(capex_act/capex_plan*100):.1f}%", cell_body_center),
+                Paragraph(f"{(capex_act/capex_plan*100):.1f}%" if capex_plan > 0 else "0.0%", cell_body_center),
                 Paragraph("Approved &amp; Verified", cell_body)
             ],
             [
@@ -821,7 +942,7 @@ class ReportingAgent:
                 Paragraph(f"${opex_plan:,.0f}", cell_body_center),
                 Paragraph(f"${opex_act:,.0f}", cell_body_center),
                 Paragraph(f"<font color='#059669'>+${opex_var:,.0f}</font>", cell_body_center),
-                Paragraph(f"{(opex_act/opex_plan*100):.1f}%", cell_body_center),
+                Paragraph(f"{(opex_act/opex_plan*100):.1f}%" if opex_plan > 0 else "0.0%", cell_body_center),
                 Paragraph("Compliant with PO", cell_body)
             ],
             [
@@ -861,12 +982,19 @@ class ReportingAgent:
             Paragraph("Tranche Value", table_th_center),
             Paragraph("Audit Feedback", table_th)
         ]
-        milestone_data = [
-            ("M-01", "Architecture Blueprint &amp; Core Migration Baseline", "Completed", "$350,000", "Sign-Off Passed"),
-            ("M-02", "Azure / Jira Bi-Directional Integration Pipeline", "Completed", "$450,000", "Verified Live"),
-            ("M-03", "Payment Gateway &amp; SAP S/4HANA Ledger Sync", "In Progress", "$300,000", "On Track (88% Velocity)"),
-            ("M-04", "Security Hardening, Compliance Audit &amp; Cutover", "Scheduled", "$400,000", "Target Sprint 6")
-        ]
+        milestone_data = []
+        if raw_milestones and isinstance(raw_milestones, list):
+            for idx, m in enumerate(raw_milestones):
+                m_id = html.escape(str(m.get("id") or m.get("milestone_code") or f"M-0{idx+1}"))
+                m_scope = html.escape(str(m.get("name") or "Milestone Scope"))
+                m_stat = html.escape(str(m.get("status") or "Scheduled"))
+                m_amt = float(m.get("trancheAmount") or m.get("tranche_amount") or m.get("amount") or 0.0)
+                m_val = f"${m_amt:,.0f}" if m_amt > 0 else "$0"
+                m_feed = html.escape(str(m.get("slaStatus") or m.get("sla_status") or m.get("audit") or "Recorded"))
+                milestone_data.append((m_id, m_scope, m_stat, m_val, m_feed))
+
+        if not milestone_data:
+            milestone_data = [("N/A", "No contractual milestones recorded for this project", "N/A", "$0", "N/A")]
         m_rows = [m_headers]
         for m_id, m_scope, m_stat, m_val, m_feed in milestone_data:
             stat_color = '#059669' if m_stat == "Completed" else ('#0284C7' if m_stat == "In Progress" else '#64748B')
@@ -1007,13 +1135,13 @@ class ReportingAgent:
         kpis_list = inputs.get("kpis", [])
         
         # Calculate derived metrics
-        planned = float(financials.get("budget_planned", 1500000.0) or 1500000.0)
-        actual = float(financials.get("budget_actual", 1200000.0) or 1200000.0)
+        planned = float(financials.get("budget_planned", 0.0) or 0.0)
+        actual = float(financials.get("budget_actual", 0.0) or 0.0)
         variance = planned - actual
-        burn_pct = round((actual / planned * 100) if planned > 0 else 80, 1)
+        burn_pct = round((actual / planned * 100) if planned > 0 else 0.0, 1)
         
-        confidence = predictive.get("confidence_score", 78)
-        health_score = int(confidence) if confidence is not None else 78
+        confidence = predictive.get("confidence_score", 0)
+        health_score = int(confidence) if confidence is not None else 0
         
         # Format budget string
         def fmt_m(val):
@@ -1153,14 +1281,7 @@ class ReportingAgent:
             # NOTE: Burndown values are a budget-ratio-derived approximation (not real sprint telemetry),
             # as there is currently no dedicated Sprint tracking table. If Jira Agile/sprint API access
             # becomes available later (via JiraTool), that will serve as the real sprint data source.
-            "burndown": burndown_data if burndown_data else [
-                {"sprint": "Sprint 1", "planned": 100, "actual": 105},
-                {"sprint": "Sprint 2", "planned": 200, "actual": 190},
-                {"sprint": "Sprint 3", "planned": 300, "actual": 320},
-                {"sprint": "Sprint 4", "planned": 400, "actual": 430},
-                {"sprint": "Sprint 5", "planned": 500, "actual": int(actual / planned * 600) if planned > 0 else 500},
-                {"sprint": "Sprint 6", "planned": 600, "actual": None}
-            ],
+            "burndown": burndown_data if burndown_data else [],
             "risks": [
                 {"label": "Critical", "color": "bg-primary", "items": critical_items},
                 {"label": "High", "color": "bg-button", "items": high_items},
@@ -1206,7 +1327,7 @@ class ReportingAgent:
             logger.warning(f"Reporting LLM generation fallback: {exc}")
             
         # Retrieve project name if available in database
-        project_name = "Alpha Core Cloud Modernization"
+        project_name = inputs.get("project_name") or f"Project #{project_id}"
         try:
             import db
             from models.project import Project
@@ -1241,18 +1362,12 @@ class ReportingAgent:
             "critical_items": critical_items,
             "high_items": high_items,
             "risks_list": risks_list,
+            "milestones": inputs.get("milestones", []),
             "rep_id": rep_id
         }
         
         # 1. Generate High-Fidelity Executive DOCX Report
-        try:
-            self._generate_professional_docx(docx_path, context_payload)
-        except Exception as docx_err:
-            logger.error(f"Error generating professional docx: {docx_err}", exc_info=True)
-            doc = docx.Document()
-            doc.add_heading('Executive Program Report', 0)
-            doc.add_paragraph(narrative)
-            doc.save(docx_path)
+        self._generate_professional_docx(docx_path, context_payload)
         
         # 2. Generate High-Fidelity Boardroom PDF Report
         try:

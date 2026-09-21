@@ -152,9 +152,7 @@ def get_project_db_telemetry(project_id):
         except Exception as err:
             print(f"[get_project_db_telemetry] Fallback parse error: {err}")
 
-    if team or milestones:
-        return {'team': team, 'milestones': milestones}
-    return None
+    return {'team': team, 'milestones': milestones}
 
 # Backward compatibility alias
 extract_project_doc_telemetry = get_project_db_telemetry
@@ -696,7 +694,7 @@ def get_snapshot():
     # Budget burn & variance calculations (baseline per active project or latest per distinct project)
     if active_project:
         latest_b = db.db_session.query(Budget).filter_by(project_id=active_project.id).order_by(Budget.created_at.desc()).first()
-        total_planned = float(latest_b.planned_spend) if latest_b else 1500000.0
+        total_planned = float(latest_b.planned_spend) if latest_b else 0.0
         total_actual = float(latest_b.actual_spend) if latest_b else 0.0
         from models.task_item import TaskItem
         doc_count = db.db_session.query(UploadedDocument).filter_by(project_id=active_project.id).count() if db.db_session else 0
@@ -1230,9 +1228,9 @@ def get_project_details(project_id):
         actual_val = float(budget_record.actual_spend)
         cost_variance = float(budget_record.variance)
     else:
-        planned_val = 1500000.0
+        planned_val = 0.0
         actual_val = 0.0
-        cost_variance = planned_val - actual_val
+        cost_variance = 0.0
 
     # Health score calculation dynamically calibrated
     health = calculate_dynamic_health_score(project, planned_val, actual_val, risks, db.db_session)

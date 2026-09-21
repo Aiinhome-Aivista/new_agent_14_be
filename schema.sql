@@ -60,6 +60,7 @@ CREATE TABLE procedural_patterns (
 CREATE TABLE users (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
 	email VARCHAR(255) NOT NULL, 
+	name VARCHAR(100), 
 	password_hash VARCHAR(255) NOT NULL, 
 	`role` VARCHAR(50) NOT NULL, 
 	PRIMARY KEY (id), 
@@ -253,11 +254,11 @@ CREATE TABLE project_telemetries (
 -- ==========================================
 
 -- 1. Initial Users (password123 hashed with Werkzeug scrypt)
-INSERT INTO users (id, email, password_hash, `role`) VALUES
-(1, 'pmo@example.com', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'PMO'),
-(2, 'investor@example.com', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Investor'),
-(3, 'director@example.com', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Program Director'),
-(4, 'pm@example.com', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Project Manager')
+INSERT INTO users (id, email, name, password_hash, `role`) VALUES
+(1, 'pmo@example.com', 'PMO Lead', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'PMO'),
+(2, 'investor@example.com', 'Lead Investor', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Investor'),
+(3, 'director@example.com', 'Program Director', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Program Director'),
+(4, 'pm@example.com', 'Project Manager', 'scrypt:32768:8:1$itKfZmQfl8ncSB4P$65595e50f5837a87ee6d2f72e42b6756d99918a0b6380293de8c58acb0943e136b45c020e213c42f12bec0dd45d2bbcb06afdab8b0967b2525a5f4e253fd8d61', 'Project Manager')
 ON DUPLICATE KEY UPDATE email=email;
 
 -- 2. Initial Projects

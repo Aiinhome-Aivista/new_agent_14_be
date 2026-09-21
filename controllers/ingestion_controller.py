@@ -196,7 +196,7 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
 
 @ingestion_bp.route('/upload', methods=['POST'])
-@require_roles('PMO', 'Project Manager')
+@require_roles('PMO', 'Project Manager', 'Program Director')
 def upload_file():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
@@ -499,7 +499,7 @@ def fetch_connector_data():
 
 
 @ingestion_bp.route('/connectors/ingest', methods=['POST'])
-@require_roles('PMO', 'Project Manager')
+@require_roles('PMO', 'Project Manager', 'Program Director')
 def ingest_connector_items():
     """
     Ingests checked items from a connector:

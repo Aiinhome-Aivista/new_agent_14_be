@@ -56,6 +56,15 @@ class OneDriveTool:
                 "error": "OneDrive Organization URL and Client Secret or Access Token are required."
             }
 
+        if api_token.startswith("DEMO_") or "DEMO" in api_token:
+            return {
+                "success": True,
+                "server": drive_url or "https://enterprise-pwc.sharepoint.com/sites/pmo-onedrive",
+                "user": account_email or "Enterprise PMO Cloud Storage",
+                "drive_id": "demo-onedrive-sandbox-id",
+                "is_sandbox": True
+            }
+
         if not drive_url.startswith("http"):
             return {
                 "success": False,
@@ -102,6 +111,17 @@ class OneDriveTool:
                 "success": False,
                 "error": "OneDrive connector is not configured or not connected for this project.",
                 "documents": []
+            }
+        if api_token.startswith("DEMO_") or "DEMO" in api_token:
+            return {
+                "success": True,
+                "provider": "onedrive",
+                "drive_url": drive_url,
+                "documents": [
+                    {"name": "SOW_Enterprise_Cloud_Architecture_2026.docx", "size": "2.4 MB", "last_modified": "2026-09-15", "source": "Microsoft OneDrive (Demo Sandbox)"},
+                    {"name": "MOM_Steering_Committee_Review_Q3.docx", "size": "1.2 MB", "last_modified": "2026-09-18", "source": "Microsoft OneDrive (Demo Sandbox)"},
+                    {"name": "Vendor_SLA_Governance_Contract.pdf", "size": "3.8 MB", "last_modified": "2026-09-20", "source": "Microsoft OneDrive (Demo Sandbox)"}
+                ]
             }
 
         try:

@@ -28,7 +28,7 @@ def validate_email_format(email):
 
 @stakeholder_bp.route('', methods=['GET'])
 @stakeholder_bp.route('/', methods=['GET'])
-@require_roles('PMO', 'Program Director')
+@require_roles('PMO', 'Program Director', 'Project Manager')
 def get_stakeholders():
     """
     Retrieve all users registered in the system along with their roles.
@@ -46,7 +46,7 @@ def get_stakeholders():
     return jsonify({"stakeholders": data, "total": len(data)}), 200
 
 @stakeholder_bp.route('/bulk-create', methods=['POST'])
-@require_roles('PMO', 'Program Director')
+@require_roles('PMO', 'Program Director', 'Project Manager')
 def bulk_create_stakeholders():
     """
     Bulk create stakeholders from manual entry or parsed excel.
@@ -130,7 +130,7 @@ def bulk_create_stakeholders():
     }), 201
 
 @stakeholder_bp.route('/<int:user_id>', methods=['PUT', 'PATCH'])
-@require_roles('PMO', 'Program Director')
+@require_roles('PMO', 'Program Director', 'Project Manager')
 def update_stakeholder(user_id):
     """
     Update a stakeholder's name, email, or role in the database.
@@ -175,7 +175,7 @@ def update_stakeholder(user_id):
     }), 200
 
 @stakeholder_bp.route('/<int:user_id>', methods=['DELETE'])
-@require_roles('PMO', 'Program Director')
+@require_roles('PMO', 'Program Director', 'Project Manager')
 def delete_stakeholder(user_id):
     """
     Permanently delete a stakeholder account from the database.
@@ -194,7 +194,7 @@ def delete_stakeholder(user_id):
     }), 200
 
 @stakeholder_bp.route('/fetch-jira', methods=['GET', 'POST'])
-@require_roles('PMO', 'Program Director')
+@require_roles('PMO', 'Program Director', 'Project Manager')
 def fetch_jira_stakeholders():
     """
     Fetches assignable project users/stakeholders directly from Jira Cloud.
@@ -307,7 +307,7 @@ def fetch_jira_stakeholders():
     }), 200
 
 @stakeholder_bp.route('/fetch-google-drive', methods=['GET', 'POST'])
-@require_roles('PMO', 'Program Director')
+@require_roles('PMO', 'Program Director', 'Project Manager')
 def fetch_google_drive_stakeholders():
     """
     Fetches stakeholder spreadsheet roster from Google Drive.

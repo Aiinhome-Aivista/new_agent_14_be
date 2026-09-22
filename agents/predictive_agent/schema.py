@@ -10,3 +10,4 @@ class PredictiveOutput(BaseModel):
     forecasted_variance: float
     confidence_score: int # 0-100
     forecast_narrative: str
+    projected_risks: List[dict] = []

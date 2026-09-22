@@ -2189,10 +2189,10 @@ def get_project_resource_detail(project_id, resource_id):
 
 
 @dashboard_bp.route('/forecast', methods=['GET'])
-@require_roles('Program Director')
+@require_roles('Program Director', 'PMO', 'Project Manager', 'Investor')
 def get_forecast():
     """
-    Returns dynamic forecast for Program Director using PredictiveAgent.
+    Returns dynamic forecast for Program Director and PMO using PredictiveAgent.
     Reads live budget variance and active risks from the database,
     then calls the PredictiveAgent's Reflexion loop for AI-driven forecasting.
     """
@@ -2202,7 +2202,22 @@ def get_forecast():
     from models.budget import Budget
     
     try:
+        from datetime import datetime, timezone
         project_id = request.args.get('project_id')
+        refresh = request.args.get('refresh', 'false').lower() in ('true', '1', 'yes')
+        target_pid = int(project_id) if project_id and str(project_id).isdigit() else 1
+
+        # Check Option 1: Saved forecast in project_telemetries table
+        if not refresh and db.db_session:
+            from models.project_telemetry import ProjectTelemetry
+            tel = db.db_session.query(ProjectTelemetry).filter_by(project_id=target_pid).first()
+            if tel and isinstance(tel.telemetry_data, dict) and tel.telemetry_data.get('latest_forecast'):
+                saved_fc = tel.telemetry_data['latest_forecast']
+                return jsonify({
+                    "status": "success",
+                    "data": saved_fc,
+                    "source": "database_cached"
+                })
 
         # --- Compute live financial variance from Budget table ---
         if project_id:
@@ -2237,9 +2252,10 @@ def get_forecast():
             active_risks = risk_query.limit(10).all()
             for r in active_risks:
                 high_critical_risks.append({
+                    "id": r.id,
                     "title": r.title,
                     "severity": r.severity,
-                    "financial_impact": 0.0
+                    "financial_impact": float(r.financial_impact) if hasattr(r, 'financial_impact') and r.financial_impact else 0.0
                 })
 
         # --- Call PredictiveAgent ---
@@ -2252,15 +2268,39 @@ def get_forecast():
         
         result = agent.execute(inputs)
 
+        forecast_payload = {
+            **result,
+            "total_planned": total_planned,
+            "total_actual": total_actual,
+            "current_variance": current_variance,
+            "risk_count": len(high_critical_risks),
+            "evaluated_risks": high_critical_risks,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # Persist to project_telemetries in MySQL so subsequent visits don't re-invoke LLM
+        if db.db_session and target_pid:
+            try:
+                from models.project_telemetry import ProjectTelemetry
+                tel = db.db_session.query(ProjectTelemetry).filter_by(project_id=target_pid).first()
+                if tel:
+                    curr_tel = dict(tel.telemetry_data or {})
+                    curr_tel["latest_forecast"] = forecast_payload
+                    tel.telemetry_data = curr_tel
+                else:
+                    new_tel = ProjectTelemetry(
+                        project_id=target_pid,
+                        telemetry_data={"latest_forecast": forecast_payload}
+                    )
+                    db.db_session.add(new_tel)
+                db.db_session.commit()
+            except Exception as save_err:
+                print(f"[get_forecast] Error saving latest_forecast to telemetry: {save_err}")
+
         return jsonify({
             "status": "success",
-            "data": {
-                **result,
-                "total_planned": total_planned,
-                "total_actual": total_actual,
-                "current_variance": current_variance,
-                "risk_count": len(high_critical_risks)
-            }
+            "data": forecast_payload,
+            "source": "live_llm"
         })
     except Exception as e:
         import traceback

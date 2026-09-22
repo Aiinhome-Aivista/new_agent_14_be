@@ -560,6 +560,87 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
         return risks_count
 
+def run_project_predictive_forecast(project_id: int):
+    """
+    Automatically re-evaluates the project's financial trajectory and 
+    executes the Reflexion predictive loop right after document ingestion.
+    """
+    try:
+        import db
+        from models.budget import Budget
+        from models.risk_register import RiskRegister
+        from models.project import Project
+        from agents.predictive_agent.agent import PredictiveAgent
+
+        latest_b = db.db_session.query(Budget).filter_by(project_id=project_id).order_by(Budget.created_at.desc()).first()
+        total_planned = float(latest_b.planned_spend) if latest_b else 0.0
+        total_actual = float(latest_b.actual_spend) if latest_b else 0.0
+        current_variance = total_planned - total_actual
+
+        proj = db.db_session.query(Project).get(project_id)
+        proj_name = proj.name if proj else f"Project #{project_id}"
+
+        active_risks = db.db_session.query(RiskRegister).filter(
+            RiskRegister.project_id == project_id,
+            RiskRegister.status == 'Open',
+            RiskRegister.severity.in_(['High', 'Critical'])
+        ).limit(10).all()
+
+        high_critical = [{
+            "id": r.id,
+            "title": r.title,
+            "severity": r.severity,
+            "financial_impact": float(r.financial_impact) if hasattr(r, 'financial_impact') and r.financial_impact else 0.0
+        } for r in active_risks]
+
+        agent = PredictiveAgent()
+        inputs = {
+            "current_variance": float(current_variance),
+            "risks": high_critical,
+            "project_status": f"Execution Phase ({proj_name})"
+        }
+        pred_res = agent.execute(inputs)
+
+        from datetime import datetime, timezone
+        forecast_payload = {
+            "success": True,
+            "project_id": project_id,
+            "project_name": proj_name,
+            "total_planned": total_planned,
+            "total_actual": total_actual,
+            "current_variance": current_variance,
+            "forecasted_variance": pred_res.get("forecasted_variance", current_variance),
+            "confidence_score": pred_res.get("confidence_score", 85),
+            "forecast_narrative": pred_res.get("forecast_narrative", ""),
+            "risk_count": len(high_critical),
+            "evaluated_risks": high_critical,
+            "projected_risks": pred_res.get("projected_risks", []),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # Option 1: Persist latest_forecast directly to project_telemetries table in MySQL
+        try:
+            from models.project_telemetry import ProjectTelemetry
+            tel = db.db_session.query(ProjectTelemetry).filter_by(project_id=project_id).first()
+            if tel:
+                curr_data = dict(tel.telemetry_data or {})
+                curr_data["latest_forecast"] = forecast_payload
+                tel.telemetry_data = curr_data
+            else:
+                new_tel = ProjectTelemetry(
+                    project_id=project_id,
+                    telemetry_data={"latest_forecast": forecast_payload}
+                )
+                db.db_session.add(new_tel)
+            db.db_session.commit()
+        except Exception as tel_err:
+            print(f"[run_project_predictive_forecast] Error saving latest_forecast to telemetry: {tel_err}")
+
+        return forecast_payload
+    except Exception as e:
+        print(f"[run_project_predictive_forecast] Warning: {e}")
+        return None
+
 @ingestion_bp.route('/upload', methods=['POST'])
 @require_roles('PMO', 'Project Manager', 'Program Director')
 def upload_file():
@@ -663,10 +744,15 @@ def upload_file():
         # Persist extracted team members and milestones permanently into MySQL
         sync_uploaded_doc_telemetry(file_path, valid_pid or project_id)
         
+        # Automatically run Predictive Forecast on the ingested document context
+        auto_fc = run_project_predictive_forecast(valid_pid or project_id)
+        
         if isinstance(result, dict):
             result["document_id"] = doc_record.id
             result["uploaded_by"] = uploaded_by
             result["risks_detected"] = risks_detected
+            if auto_fc:
+                result["auto_forecast"] = auto_fc
 
         return jsonify(result)
     except Exception as e:
@@ -1181,11 +1267,15 @@ def ingest_connector_items():
 
     db.db_session.commit()
 
+    # Automatically run Predictive Forecast on the updated project context
+    auto_fc = run_project_predictive_forecast(project_id)
+
     return jsonify({
         "success": True,
         "message": f"Successfully vectorized and ingested {ingested_count} items from {prov_title} into Project #{project_id}!",
         "ingested_count": ingested_count,
         "project_id": project_id,
-        "provider": provider
+        "provider": provider,
+        "auto_forecast": auto_fc
     })
 

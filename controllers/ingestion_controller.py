@@ -117,18 +117,43 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 is_active_today=True
                             )
                             db.db_session.add(new_m)
-            elif 'milestone' in headers:
-                m_idx = headers.index('milestone')
+            elif 'milestone' in headers or any('milestone' in h for h in headers):
+                m_idx = -1
+                for idx, h in enumerate(headers):
+                    if 'milestone' in h or 'code' in h or 'id' in h:
+                        m_idx = idx
+                        break
                 desc_idx = headers.index('description') if 'description' in headers else -1
-                target_idx = headers.index('target date') if 'target date' in headers else -1
+                target_idx = headers.index('target date') if 'target date' in headers else (-1 if 'target' not in headers else headers.index('target'))
                 stat_idx = headers.index('status') if 'status' in headers else -1
+                tranche_idx = -1
+                for idx, h in enumerate(headers):
+                    if any(k in h for k in ['tranche', 'amount', 'value', 'price', 'cost', 'budget']):
+                        tranche_idx = idx
+                        break
+
                 for row in table.rows[1:]:
                     cells = [c.text.strip() for c in row.cells]
-                    if len(cells) > m_idx and cells[m_idx]:
+                    if len(cells) > m_idx and m_idx >= 0 and cells[m_idx]:
                         m_code = cells[m_idx]
                         m_desc = cells[desc_idx] if desc_idx >= 0 and len(cells) > desc_idx else ''
                         m_target = cells[target_idx] if target_idx >= 0 and len(cells) > target_idx else 'TBD'
                         m_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else 'Pending'
+                        
+                        m_tranche = 0.0
+                        if tranche_idx >= 0 and len(cells) > tranche_idx:
+                            raw_tr = cells[tranche_idx]
+                            try:
+                                clean_tr = raw_tr.replace("$", "").replace(",", "").strip()
+                                if clean_tr.lower().endswith("k"):
+                                    m_tranche = float(clean_tr[:-1]) * 1000
+                                elif clean_tr.lower().endswith("m"):
+                                    m_tranche = float(clean_tr[:-1]) * 1000000
+                                else:
+                                    m_tranche = float(clean_tr)
+                            except Exception:
+                                m_tranche = 0.0
+
                         comp_pct = 100 if m_stat.lower() in ('done', 'completed') else (50 if m_stat.lower() in ('in progress', 'on track') else (20 if 'risk' in m_stat.lower() else 0))
                         existing_ms = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id, milestone_code=m_code).first()
                         if existing_ms:
@@ -137,6 +162,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                             existing_ms.target_date = m_target
                             existing_ms.status = m_stat
                             existing_ms.completion_pct = comp_pct
+                            if m_tranche > 0:
+                                existing_ms.tranche_amount = m_tranche
                         else:
                             new_ms = ProjectMilestone(
                                 project_id=project_id,
@@ -146,7 +173,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 target_date=m_target,
                                 status=m_stat,
                                 completion_pct=comp_pct,
-                                days_left=0 if comp_pct == 100 else 45
+                                days_left=0 if comp_pct == 100 else 45,
+                                tranche_amount=m_tranche
                             )
                             db.db_session.add(new_ms)
             elif any(any(k in h for k in ['task', 'deliverable', 'action item']) for h in headers):

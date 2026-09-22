@@ -25,20 +25,24 @@ Initial State:
 Phase 1 (Initial Projection): Formulate baseline cost variance trajectory based on linear burn rate.
 Phase 2 (Self-Critique): Challenge the baseline against active high-severity risks, vendor lead times, and compounding delay risks.
 Phase 3 (Refined Convergence): Output final converged forecasted_variance (float), confidence_score (integer 0-100), and forecast_narrative explaining the critique adjustments.
+Phase 4 (Predictive Threat Projection): Generate 2 to 4 realistic EMERGING / POTENTIAL FUTURE RISKS that could materialize in subsequent delivery cycles and exacerbate budget or schedule variance. For each projected risk, specify:
+  - "threat_title": clear concise risk description
+  - "category": e.g. "Vendor / Technical", "Infrastructure", "Staffing", or "Regulatory"
+  - "probability_pct": integer 1-100 likelihood of occurrence
+  - "severity": "Critical", "High", or "Medium"
+  - "financial_exposure": estimated dollar cost impact as a float
+  - "preventive_action": actionable recommendation to mitigate this risk before it occurs
 
 Return JSON ONLY matching schema:
-{{"forecasted_variance": float, "confidence_score": int, "forecast_narrative": str}}
+{{"forecasted_variance": float, "confidence_score": int, "forecast_narrative": str, "projected_risks": [{{"threat_title": str, "category": str, "probability_pct": int, "severity": str, "financial_exposure": float, "preventive_action": str}}]}}
 """
         
         try:
             response = llm.generate(reflexion_prompt, system=get_predictive_system_prompt(), format="json", tier="high")
             parsed = json.loads(response)
             parsed["ai_processing_status"] = "success"
+            if "projected_risks" not in parsed or not isinstance(parsed["projected_risks"], list):
+                parsed["projected_risks"] = []
             return parsed
-        except Exception:
-            return {
-                "forecasted_variance": inputs.get("current_variance", 0.0),
-                "confidence_score": 82,
-                "forecast_narrative": "Trajectory converged through Reflexion critique against risk register and current burn acceleration.",
-                "ai_processing_status": "degraded_fallback"
-            }
+        except Exception as e:
+            raise RuntimeError(f"Predictive Reflexion loop failed to converge: {str(e)}")

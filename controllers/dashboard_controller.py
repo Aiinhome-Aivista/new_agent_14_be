@@ -91,12 +91,14 @@ def get_project_db_telemetry(project_id):
             import os
             from docx import Document
             from models.uploaded_document import UploadedDocument
+            import re
             docs = db.db_session.query(UploadedDocument).filter_by(project_id=project_id).all()
             for d in docs:
                 if not d.filename:
                     continue
-                p1 = os.path.join('uploads', d.filename)
-                p2 = os.path.join('..', d.filename)
+                clean_name = re.sub(r'^\[[^\]]+\]\s*', '', d.filename).strip()
+                p1 = os.path.join('uploads', clean_name)
+                p2 = os.path.join('uploads', d.filename)
                 doc_path = p1 if os.path.exists(p1) and p1.lower().endswith('.docx') else (p2 if os.path.exists(p2) and p2.lower().endswith('.docx') else None)
                 if doc_path:
                     doc = Document(doc_path)

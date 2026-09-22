@@ -445,3 +445,73 @@ class GoogleDriveTool:
             "new_documents_synced": synced_count,
             "message": f"Successfully synchronized {synced_count} new document(s) (out of {len(docs)} found in Google Drive) into Project [{proj.jira_key}]."
         }
+
+    @staticmethod
+    def download_file(file_id: str, dest_path: str, mime_type: str = "", project_id=None) -> bool:
+        """
+        Downloads a file from Google Drive directly into dest_path (within uploads/ directory).
+        Supports binary documents (DOCX, PDF, XLSX, TXT) and Google Workspace Docs/Sheets exports.
+        Falls back to existing file in uploads/ if already present.
+        """
+        import os
+        uploads_dir = os.path.join(os.getcwd(), 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        # Check if destination file already exists and has content
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            return True
+
+        folder_url, service_email, api_key = GoogleDriveTool.get_credentials(project_id=project_id)
+        if not api_key:
+            return False
+
+        try:
+            bearer_token = resolve_google_access_token(api_key, service_email)
+            headers = {
+                "Authorization": f"Bearer {bearer_token}"
+            }
+
+            # 1. If native Google Doc / Sheet, use export endpoint
+            if mime_type and "google-apps" in mime_type:
+                if "spreadsheet" in mime_type:
+                    exp_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                elif "presentation" in mime_type:
+                    exp_mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                else:
+                    exp_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                exp_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export?mimeType={exp_mime}"
+                resp = requests.get(exp_url, headers=headers, stream=True, timeout=30)
+                if resp.status_code == 200:
+                    with open(dest_path, 'wb') as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return True
+
+            # 2. Binary file download via alt=media
+            dl_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+            resp = requests.get(dl_url, headers=headers, stream=True, timeout=30)
+            if resp.status_code == 200:
+                with open(dest_path, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return True
+            elif resp.status_code == 403:
+                # Might be a Google doc requiring export
+                exp_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export?mimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                resp_exp = requests.get(exp_url, headers=headers, stream=True, timeout=30)
+                if resp_exp.status_code == 200:
+                    with open(dest_path, 'wb') as f:
+                        for chunk in resp_exp.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return True
+        except Exception as e:
+            logger.warning(f"Failed to download file {file_id} from Google Drive: {e}")
+
+        # Fallback check in uploads/ folder only (e.g. matching by basename)
+        base_name = os.path.basename(dest_path)
+        existing_in_uploads = os.path.join(uploads_dir, base_name)
+        if os.path.exists(existing_in_uploads) and os.path.getsize(existing_in_uploads) > 0:
+            return True
+
+        return False
+

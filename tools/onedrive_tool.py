@@ -226,3 +226,56 @@ class OneDriveTool:
             "new_documents_synced": synced_count,
             "message": f"Successfully synchronized {synced_count} documents from Microsoft OneDrive into Project [{proj.jira_key}]."
         }
+
+    @staticmethod
+    def download_file(file_name_or_id: str, dest_path: str, project_id=None) -> bool:
+        """
+        Downloads a file from Microsoft OneDrive into dest_path (strictly within uploads/ directory).
+        Supports Microsoft Graph API content streaming with uploads/ fallback.
+        """
+        import os
+        uploads_dir = os.path.join(os.getcwd(), 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            return True
+
+        drive_url, account_email, api_token = OneDriveTool.get_credentials(project_id=project_id)
+        if api_token and not api_token.startswith("DEMO"):
+            headers = {"Authorization": f"Bearer {api_token}"}
+            url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_name_or_id}/content"
+            try:
+                resp = requests.get(url, headers=headers, stream=True, timeout=30)
+                if resp.status_code == 200:
+                    with open(dest_path, 'wb') as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return True
+                # Path-based lookup fallback
+                alt_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{file_name_or_id}:/content"
+                resp_alt = requests.get(alt_url, headers=headers, stream=True, timeout=30)
+                if resp_alt.status_code == 200:
+                    with open(dest_path, 'wb') as f:
+                        for chunk in resp_alt.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return True
+            except Exception as e:
+                logger.warning(f"OneDrive Graph API download failed for {file_name_or_id}: {e}")
+
+        # Fallback check in uploads/ folder only
+        base_name = os.path.basename(dest_path)
+        existing_in_uploads = os.path.join(uploads_dir, base_name)
+        if os.path.exists(existing_in_uploads) and os.path.getsize(existing_in_uploads) > 0:
+            return True
+
+        # Normalize duplicate suffixes like ' (1)' in filename
+        import re
+        norm_name = re.sub(r'\s*\(\d+\)', '', base_name)
+        norm_path = os.path.join(uploads_dir, norm_name)
+        if os.path.exists(norm_path) and os.path.getsize(norm_path) > 0:
+            import shutil
+            shutil.copyfile(norm_path, dest_path)
+            return True
+
+        return False
+

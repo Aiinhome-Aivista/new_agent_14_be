@@ -185,32 +185,67 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 if tot_val > 0 and parsed_budget_planned is None:
                                     parsed_budget_planned = tot_val
 
-            # C. Team Members Table: ['name', 'role']
-            if 'name' in headers and 'role' in headers and 'signature' not in headers:
-                name_idx = headers.index('name')
-                role_idx = headers.index('role')
-                contact_idx = headers.index('contact') if 'contact' in headers else -1
+            # C. Team Members Table: generic dynamic matching on role / name / resource / accountability / staffing
+            if any(any(k in h for k in ['role', 'position', 'resource', 'member', 'lead', 'accountability']) for h in headers) or ('name' in headers and not any('milestone' in h or 'deliverable' in h for h in headers)):
+                name_idx = next((i for i, h in enumerate(headers) if 'name' in h), -1)
+                role_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['role', 'position', 'resource', 'title'])), -1)
+                contact_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['contact', 'email', 'phone'])), -1)
+                alloc_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['alloc', 'share', 'util'])), -1)
+                account_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['accountability', 'responsibility', 'desc'])), -1)
+
                 for row in table.rows[1:]:
                     cells = [c.text.strip() for c in row.cells]
-                    if len(cells) > max(name_idx, role_idx) and cells[name_idx]:
-                        m_name = cells[name_idx]
-                        m_role = cells[role_idx]
-                        m_contact = cells[contact_idx] if contact_idx >= 0 and len(cells) > contact_idx else ''
-                        existing = db.db_session.query(ProjectMember).filter_by(project_id=project_id, name=m_name).first()
-                        if existing:
-                            existing.role = m_role
-                            existing.contact = m_contact
+                    m_name = ""
+                    m_role = ""
+                    m_contact = ""
+                    m_alloc = 100.0
+
+                    if name_idx >= 0 and role_idx >= 0 and len(cells) > max(name_idx, role_idx):
+                        m_name = cells[name_idx].strip()
+                        m_role = cells[role_idx].strip()
+                    elif role_idx >= 0 and len(cells) > role_idx:
+                        m_role = cells[role_idx].strip()
+                        m_name = m_role
+                    elif name_idx >= 0 and len(cells) > name_idx:
+                        m_name = cells[name_idx].strip()
+                        m_role = "Core Team Member"
+
+                    if not m_name or m_name.lower() in ('total', 'subtotal', 'name', 'role', 'approved by', 'client sponsor', 'sign-off'):
+                        if m_role and m_role.lower() not in ('total', 'subtotal', 'role'):
+                            m_name = m_role
                         else:
-                            new_m = ProjectMember(
-                                project_id=project_id,
-                                name=m_name,
-                                role=m_role,
-                                contact=m_contact,
-                                member_type='Internal FTE',
-                                allocation_pct=100.0,
-                                is_active_today=True
-                            )
-                            db.db_session.add(new_m)
+                            continue
+
+                    if not m_role or m_role.lower() in ('total', 'subtotal'):
+                        m_role = "Team Member"
+
+                    if contact_idx >= 0 and len(cells) > contact_idx:
+                        m_contact = cells[contact_idx].strip()
+                    elif account_idx >= 0 and len(cells) > account_idx:
+                        m_contact = cells[account_idx].strip()
+
+                    if alloc_idx >= 0 and len(cells) > alloc_idx:
+                        parsed_alloc = clean_numeric_str(cells[alloc_idx])
+                        if parsed_alloc > 0:
+                            m_alloc = parsed_alloc
+
+                    existing = db.db_session.query(ProjectMember).filter_by(project_id=project_id, name=m_name).first()
+                    if existing:
+                        existing.role = m_role
+                        if m_contact:
+                            existing.contact = m_contact
+                        existing.allocation_pct = m_alloc
+                    else:
+                        new_m = ProjectMember(
+                            project_id=project_id,
+                            name=m_name,
+                            role=m_role,
+                            contact=m_contact,
+                            member_type='Internal FTE' if any(k in m_role.lower() for k in ['lead', 'architect', 'director', 'manager', 'owner', 'sponsor']) else 'Vendor Contractor',
+                            allocation_pct=m_alloc,
+                            is_active_today=True
+                        )
+                        db.db_session.add(new_m)
 
             # D. Milestones Table: ['milestone', 'description' or 'baseline' or 'deliverable']
             elif 'milestone' in headers:
@@ -218,6 +253,7 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                 desc_idx = -1
                 target_idx = -1
                 stat_idx = -1
+                amount_idx = -1
                 for idx, h in enumerate(headers):
                     if any(k in h for k in ['description', 'deliverable', 'name']):
                         desc_idx = idx
@@ -225,26 +261,29 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         target_idx = idx
                     elif 'status' in h:
                         stat_idx = idx
+                    elif any(k in h for k in ['amount', 'payment', 'tranche', 'cost', 'val']):
+                        amount_idx = idx
 
                 for row in table.rows[1:]:
                     cells = [c.text.strip() for c in row.cells]
                     if len(cells) > m_idx and cells[m_idx]:
                         m_code = cells[m_idx]
-                        if m_code.lower() in ('total', 'subtotal'):
+                        if m_code.lower() in ('total', 'subtotal', 'milestone'):
                             continue
                         m_desc = cells[desc_idx] if desc_idx >= 0 and len(cells) > desc_idx else ''
                         m_target = cells[target_idx] if target_idx >= 0 and len(cells) > target_idx else 'TBD'
                         m_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else 'In Progress'
+                        m_tranche = clean_numeric_str(cells[amount_idx]) if amount_idx >= 0 and len(cells) > amount_idx else 0.0
                         
                         # Determine milestone completion percentage
                         comp_pct = 0
-                        if any(k in m_stat.lower() for k in ['done', 'completed', 'delivered']):
+                        if any(k in m_stat.lower() for k in ['done', 'completed', 'delivered', 'released']):
                             comp_pct = 100
-                        elif any(k in m_stat.lower() for k in ['green', 'on track']):
+                        elif any(k in m_stat.lower() for k in ['green', 'on track', 'active', 'authorized']):
                             comp_pct = 75
-                        elif any(k in m_stat.lower() for k in ['amber', 'in progress']):
+                        elif any(k in m_stat.lower() for k in ['amber', 'in progress', 'warning']):
                             comp_pct = 50
-                        elif any(k in m_stat.lower() for k in ['risk', 'delayed']):
+                        elif any(k in m_stat.lower() for k in ['risk', 'delayed', 'hold', 'red']):
                             comp_pct = 25
 
                         # Target date fallback check
@@ -260,6 +299,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 existing_ms.target_date = m_target
                             existing_ms.status = m_stat
                             existing_ms.completion_pct = comp_pct
+                            if m_tranche > 0:
+                                existing_ms.tranche_amount = m_tranche
                             existing_ms.sla_score = 96.0 if comp_pct >= 75 else (91.5 if comp_pct >= 50 else 84.0)
                             existing_ms.sla_status = 'Compliant' if comp_pct >= 50 else 'At Risk'
                         else:
@@ -272,33 +313,46 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 status=m_stat,
                                 completion_pct=comp_pct,
                                 days_left=0 if comp_pct == 100 else 45,
-                                tranche_amount=92508.0,
+                                tranche_amount=m_tranche if m_tranche > 0 else 0.0,
                                 sla_score=96.0 if comp_pct >= 75 else 91.5,
                                 sla_status='Compliant' if comp_pct >= 50 else 'At Risk'
                             )
                             db.db_session.add(new_ms)
 
             # E. Workstream Completion Table: ['workstream', 'completion']
-            elif 'workstream' in headers and 'completion' in headers:
+            elif 'workstream' in headers and any(any(k in h for k in ['completion', 'progress', 'status', 'pct']) for h in headers):
                 ws_idx = headers.index('workstream')
-                comp_idx = headers.index('completion')
-                for row in table.rows[1:]:
+                comp_idx = next(i for i, h in enumerate(headers) if any(k in h for k in ['completion', 'progress', 'status', 'pct']))
+                for row_idx, row in enumerate(table.rows[1:]):
                     cells = [c.text.strip() for c in row.cells]
                     if len(cells) > max(ws_idx, comp_idx):
                         ws_title = cells[ws_idx]
+                        if not ws_title or ws_title.lower() in ('total', 'subtotal', 'workstream'):
+                            continue
                         ws_pct = clean_numeric_str(cells[comp_idx])
+                        t_stat = 'Completed' if ws_pct >= 80 else ('In Progress' if ws_pct > 0 else 'To Do')
                         t_match = db.db_session.query(TaskItem).filter_by(project_id=project_id, summary=ws_title).first()
                         if t_match:
-                            if ws_pct >= 80:
-                                t_match.status = 'Completed'
-                            elif ws_pct > 0:
-                                t_match.status = 'In Progress'
+                            t_match.status = t_stat
+                            t_match.updated_at = datetime.now(timezone.utc)
+                        else:
+                            new_ws_task = TaskItem(
+                                project_id=project_id,
+                                jira_key=f"WS-{project_id}-{row_idx+1}",
+                                summary=ws_title,
+                                status=t_stat,
+                                priority="High",
+                                assignee="Workstream Owner",
+                                created_at=datetime.now(timezone.utc),
+                                updated_at=datetime.now(timezone.utc)
+                            )
+                            db.db_session.add(new_ws_task)
 
             # F. Tasks / Action Items / Decisions Table
-            elif any(any(k in h for k in ['task', 'deliverable', 'action item', 'decision']) for h in headers):
+            elif any(any(k in h for k in ['task', 'deliverable', 'action', 'decision', 'activity']) for h in headers) and not any('cost' in h or 'rate' in h for h in headers):
                 title_idx = -1
                 for idx, h in enumerate(headers):
-                    if any(k in h for k in ['task', 'deliverable', 'action item', 'decision', 'title', 'summary', 'item']):
+                    if any(k in h for k in ['task', 'deliverable', 'action', 'decision', 'activity', 'title', 'summary', 'item']):
                         title_idx = idx
                         break
                 
@@ -315,6 +369,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         cells = [c.text.strip() for c in row.cells]
                         if len(cells) > title_idx and cells[title_idx]:
                             t_title = cells[title_idx]
+                            if not t_title or t_title.lower() in ('total', 'subtotal', 'action', 'task', 'decision'):
+                                continue
                             raw_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else 'In Progress'
                             t_stat = 'In Progress'
                             if any(k in raw_stat.lower() for k in ['done', 'completed', 'approved', 'resolved']):
@@ -344,6 +400,51 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 )
                                 db.db_session.add(new_t)
 
+            # G. Risk Registers & Audit Findings Table
+            elif any(any(k in h for k in ['risk', 'finding', 'threat']) for h in headers) or ('item' in headers and 'severity' in headers):
+                from models.risk_register import RiskRegister
+                id_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['id', 'code', 'number'])), -1)
+                desc_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['risk', 'finding', 'item', 'description'])), -1)
+                sev_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['severity', 'impact', 'level', 'likelihood'])), -1)
+                mit_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['mitigation', 'remediation', 'treatment', 'control'])), -1)
+
+                if desc_idx != -1:
+                    for row_idx, row in enumerate(table.rows[1:]):
+                        cells = [c.text.strip() for c in row.cells]
+                        if len(cells) > desc_idx and cells[desc_idx]:
+                            r_title = cells[desc_idx]
+                            if not r_title or r_title.lower() in ('total', 'subtotal', 'risk', 'finding', 'item'):
+                                continue
+                            raw_id = cells[id_idx] if id_idx >= 0 and len(cells) > id_idx and cells[id_idx] else f"R-{project_id}-{row_idx+1}"
+                            raw_sev = cells[sev_idx] if sev_idx >= 0 and len(cells) > sev_idx else "Medium"
+                            raw_mit = cells[mit_idx] if mit_idx >= 0 and len(cells) > mit_idx else "Under review"
+
+                            final_sev = "Medium"
+                            if any(k in raw_sev.lower() for k in ['crit', 'blocker']):
+                                final_sev = "Critical"
+                            elif any(k in raw_sev.lower() for k in ['high', 'elevated', 'major']):
+                                final_sev = "High"
+                            elif any(k in raw_sev.lower() for k in ['low', 'minor']):
+                                final_sev = "Low"
+
+                            existing_r = db.db_session.query(RiskRegister).filter_by(project_id=project_id, risk_id=raw_id).first()
+                            if existing_r:
+                                existing_r.title = r_title
+                                existing_r.severity = final_sev
+                                existing_r.mitigation_plan = raw_mit
+                            else:
+                                new_risk_item = RiskRegister(
+                                    project_id=project_id,
+                                    risk_id=raw_id,
+                                    title=r_title,
+                                    description=r_title,
+                                    severity=final_sev,
+                                    status="Open",
+                                    mitigation_plan=raw_mit,
+                                    created_at=datetime.now(timezone.utc)
+                                )
+                                db.db_session.add(new_risk_item)
+
         # 2. Update or Insert Budget record if extracted
         if parsed_budget_planned is not None:
             existing_b = db.db_session.query(Budget).filter_by(project_id=project_id).first()
@@ -372,7 +473,15 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                     t.status = 'Completed'
 
         # 4. Upsert ProjectTelemetry dynamic JSON record in MySQL
-        target_final_date = extracted_target_date or "30 April 2027"
+        target_final_date = extracted_target_date
+        if not target_final_date:
+            ms_dates = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id).all()
+            for m in ms_dates:
+                if m.target_date and m.target_date.lower() not in ('tbd', 'none', 'in progress', 'completed'):
+                    target_final_date = m.target_date
+        if not target_final_date:
+            target_final_date = "Active Roadmap"
+
         existing_tel = db.db_session.query(ProjectTelemetry).filter_by(project_id=project_id).first()
         
         all_members = db.db_session.query(ProjectMember).filter_by(project_id=project_id).all()
@@ -385,7 +494,7 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
             "project_id": project_id,
             "target_date": target_final_date,
             "target_go_live": target_final_date,
-            "overall_status": extracted_overall_status or "AMBER",
+            "overall_status": extracted_overall_status or "Active",
             "team": team_payload,
             "milestones": milestones_payload,
             "governance": {
@@ -775,8 +884,15 @@ def ingest_connector_items():
     }
     prov_title = provider_labels.get(provider, provider.title())
 
+    uploads_dir = os.path.join(os.getcwd(), 'uploads')
+    os.makedirs(uploads_dir, exist_ok=True)
+    from services.ingestion_service import IngestionService
+    import re
+
     timestamp_str = str(int(time.time()))
     ingested_count = 0
+
+    downloaded_doc_paths = []
 
     for item in items:
         item_id = str(item.get("id", f"item_{int(time.time())}"))
@@ -787,7 +903,13 @@ def ingest_connector_items():
         assignee_val = item.get("assignee") or "Unassigned"
         desc = item.get("description") or f"{title} from {prov_title}"
 
-        # Determine item-level accuracy score
+        # Clean title to get filename without [Provider] prefix
+        clean_title = re.sub(r'^\[[^\]]+\]\s*', '', title).strip()
+        file_ext = (
+            clean_title.split('.')[-1].upper() if '.' in clean_title and len(clean_title.split('.')[-1]) <= 5
+            else ("JIRA" if provider == "jira" else ("ADO" if provider == "azure_devops" else "DOCX"))
+        )
+
         item_acc = item.get("accuracy_score")
         if item_acc is not None:
             try:
@@ -797,126 +919,230 @@ def ingest_connector_items():
         else:
             final_acc = default_acc if default_acc is not None else 90
 
-        # 1. Prepare semantic text content for ChromaDB
-        full_content = (
-            f"Source Connector: {prov_title}\n"
-            f"Item ID / Key: {item_id}\n"
-            f"Title: {title}\n"
-            f"Project: {proj_name} (Key: {proj_key}, ID: #{project_id})\n"
-            f"Classification: {item_type}\n"
-            f"Status: {status_val}\n"
-            f"Priority / Size: {priority_val}\n\n"
-            f"Detailed Content / Telemetry:\n{desc}\n"
-            f"Ingested via VPM Enterprise Connector Data Ops pipeline."
-        )
+        file_path = os.path.join(uploads_dir, clean_title)
+        file_available = False
 
-        # 2. Partitioning into semantic chunks (ChromaDB)
-        chunk_size = 450
-        chunks = [full_content[i:i+chunk_size] for i in range(0, len(full_content), chunk_size)]
-        if not chunks:
-            chunks = [full_content]
+        if provider in ['google_drive', 'onedrive']:
+            if provider == 'google_drive':
+                from tools.google_drive_tool import GoogleDriveTool
+                mime = item.get("mime_type") or item.get("type") or ""
+                file_available = GoogleDriveTool.download_file(item_id, file_path, mime_type=mime, project_id=project_id)
+            elif provider == 'onedrive':
+                from tools.onedrive_tool import OneDriveTool
+                file_available = OneDriveTool.download_file(item_id or clean_title, file_path, project_id=project_id)
 
-        chunk_ids = [f"{provider}_{item_id}_chunk_{c_idx}_{timestamp_str}" for c_idx in range(len(chunks))]
-        metadatas = [
-            {
-                "source": prov_title,
-                "provider": provider,
-                "item_id": item_id,
-                "filename": title,
-                "title": title,
-                "project_id": str(project_id),
-                "chunk_index": c_idx,
-                "timestamp": timestamp_str,
-                "total_chunks": len(chunks)
-            }
-            for c_idx in range(len(chunks))
-        ]
+            if not file_available and os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                file_available = True
 
-        vector_indexed = False
-        try:
-            semantic_memory.add_documents(
-                collection_name="program_knowledge",
-                documents=chunks,
-                metadatas=metadatas,
-                ids=chunk_ids
+        if file_available and os.path.exists(file_path):
+            downloaded_doc_paths.append(file_path)
+            file_stat = os.stat(file_path)
+            file_size_bytes = file_stat.st_size
+            size_kb = file_size_bytes / 1024
+            size_fmt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb / 1024):.2f} MB"
+
+            # 1. High-fidelity chunking and vector memory indexing for ChromaDB
+            try:
+                from tools.doc_tool import DocTool
+                raw_text = DocTool.parse_file(file_path)
+                paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+                chunks = []
+                current = ""
+                for p in paragraphs:
+                    if len(current) + len(p) + 2 <= 500:
+                        current = (current + "\n\n" + p).strip()
+                    else:
+                        if current:
+                            chunks.append(current)
+                            tail = current[-60:] if len(current) > 60 else current
+                            current = (tail + " " + p).strip() if len(tail) + len(p) <= 500 else p
+                        else:
+                            chunks.append(p[:500])
+                if current:
+                    chunks.append(current)
+                if not chunks:
+                    chunks = [raw_text[:500]] if raw_text else ["Document Content"]
+
+                c_ids = [f"{provider}_{clean_title}_chunk_{c_idx}_{timestamp_str}" for c_idx in range(len(chunks))]
+                c_metas = [
+                    {
+                        "source": prov_title,
+                        "provider": provider,
+                        "filename": clean_title,
+                        "title": title,
+                        "project_id": str(project_id),
+                        "chunk_index": c_idx,
+                        "timestamp": timestamp_str,
+                        "total_chunks": len(chunks)
+                    }
+                    for c_idx in range(len(chunks))
+                ]
+                semantic_memory.add_documents(
+                    collection_name="program_knowledge",
+                    documents=chunks,
+                    metadatas=c_metas,
+                    ids=c_ids
+                )
+            except Exception as v_err:
+                print(f"[connectors/ingest] Vector indexing error for {clean_title}: {v_err}")
+
+            # 2. Synchronize structured telemetry into MySQL (Team, Milestones, Budgets, Tasks, Telemetry)
+            sync_uploaded_doc_telemetry(file_path, project_id)
+
+            # 3. Save uploaded_documents record
+            doc_record = UploadedDocument(
+                filename=f"[{prov_title}] {clean_title}",
+                file_type=file_ext,
+                file_size_bytes=file_size_bytes,
+                file_size_formatted=size_fmt,
+                uploaded_by=f"{prov_title} Agent",
+                uploaded_by_role="Connector Pipeline",
+                project_id=project_id,
+                status="Indexed in Vector Memory",
+                risks_detected=0,
+                accuracy_score=final_acc,
+                created_at=datetime.now(timezone.utc)
             )
-            vector_indexed = True
-        except Exception as vec_err:
-            print(f"Warning: Vector DB insertion for {item_id}: {vec_err}")
-            vector_indexed = False
+            db.db_session.add(doc_record)
+            ingested_count += 1
 
-        # 3. Store in MySQL uploaded_documents table
-        file_ext = (
-            title.split('.')[-1].upper() if '.' in title and len(title.split('.')[-1]) <= 5
-            else ("JIRA" if provider == "jira" else ("ADO" if provider == "azure_devops" else provider.upper()))
-        )
-        size_fmt = item.get("size") or ("2.5 KB" if file_ext in ["JIRA", "ADO"] else "1.5 MB")
-        has_risk = 1 if priority_val in ["Critical", "High", "Blocker"] or "risk" in title.lower() else 0
+        else:
+            # Fallback for Jira / ADO or cloud files without local bytes
+            full_content = (
+                f"Source Connector: {prov_title}\n"
+                f"Item ID / Key: {item_id}\n"
+                f"Title: {title}\n"
+                f"Project: {proj_name} (Key: {proj_key}, ID: #{project_id})\n"
+                f"Classification: {item_type}\n"
+                f"Status: {status_val}\n"
+                f"Priority / Size: {priority_val}\n\n"
+                f"Detailed Content / Telemetry:\n{desc}\n"
+                f"Ingested via VPM Enterprise Connector Data Ops pipeline."
+            )
 
-        doc_record = UploadedDocument(
-            filename=f"[{prov_title}] {title}" if not title.startswith("[") else title,
-            file_type=file_ext,
-            file_size_bytes=int(item.get("bytes") or 2048),
-            file_size_formatted=size_fmt,
-            uploaded_by=f"{prov_title} Agent",
-            uploaded_by_role="Connector Pipeline",
-            project_id=project_id,
-            status="Indexed in Vector Memory" if vector_indexed else "Indexing Failed (Vector DB Error)",
-            risks_detected=has_risk,
-            accuracy_score=final_acc,
-            created_at=datetime.now(timezone.utc)
-        )
-        db.db_session.add(doc_record)
-        ingested_count += 1
+            chunk_size = 450
+            chunks = [full_content[i:i+chunk_size] for i in range(0, len(full_content), chunk_size)] or [full_content]
+            chunk_ids = [f"{provider}_{item_id}_chunk_{c_idx}_{timestamp_str}" for c_idx in range(len(chunks))]
+            metadatas = [
+                {
+                    "source": prov_title,
+                    "provider": provider,
+                    "item_id": item_id,
+                    "filename": title,
+                    "title": title,
+                    "project_id": str(project_id),
+                    "chunk_index": c_idx,
+                    "timestamp": timestamp_str,
+                    "total_chunks": len(chunks)
+                }
+                for c_idx in range(len(chunks))
+            ]
 
-        # If item indicates a critical/high delivery blocker or risk, persist into RiskRegister
-        if has_risk:
-            from models.risk_register import RiskRegister
-            clean_rid = f"R-{item_id}" if not item_id.startswith("R-") else item_id
-            existing_risk = db.db_session.query(RiskRegister).filter(
-                RiskRegister.project_id == project_id,
-                (RiskRegister.risk_id == clean_rid) | (RiskRegister.jira_issue_key == item_id)
-            ).first()
-            if not existing_risk:
-                new_r = RiskRegister(
-                    project_id=project_id,
-                    risk_id=clean_rid,
-                    title=title,
-                    description=desc,
-                    severity="Critical" if priority_val in ["Critical", "Blocker"] else "High",
-                    status="Open",
-                    owner=f"{prov_title} Synced",
-                    mitigation_plan=f"Ingested from live {prov_title} ticket {item_id}. Prioritize in sprint backlog.",
-                    jira_issue_key=item_id if provider == "jira" else None,
-                    created_at=datetime.now(timezone.utc)
+            try:
+                semantic_memory.add_documents(
+                    collection_name="program_knowledge",
+                    documents=chunks,
+                    metadatas=metadatas,
+                    ids=chunk_ids
                 )
-                db.db_session.add(new_r)
+            except Exception as vec_err:
+                print(f"Warning: Vector DB insertion for {item_id}: {vec_err}")
 
-        # Store as TaskItem so it shows up in the dashboard
-        from models.task_item import TaskItem
-        if provider in ["jira", "azure_devops"]:
-            existing_task = db.db_session.query(TaskItem).filter(
-                TaskItem.project_id == project_id,
-                TaskItem.jira_key == item_id
-            ).first()
-            if not existing_task:
-                new_task = TaskItem(
-                    project_id=project_id,
-                    jira_key=item_id,
-                    summary=title,
-                    status=status_val,
-                    priority=priority_val,
-                    assignee=assignee_val,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc)
-                )
-                db.db_session.add(new_task)
-            else:
-                existing_task.summary = title
-                existing_task.status = status_val
-                existing_task.priority = priority_val
-                existing_task.assignee = assignee_val
-                existing_task.updated_at = datetime.now(timezone.utc)
+            has_risk = 1 if priority_val in ["Critical", "High", "Blocker"] or "risk" in title.lower() else 0
+            size_fmt = item.get("size") or ("2.5 KB" if file_ext in ["JIRA", "ADO"] else "1.5 MB")
+
+            doc_record = UploadedDocument(
+                filename=f"[{prov_title}] {title}" if not title.startswith("[") else title,
+                file_type=file_ext,
+                file_size_bytes=int(item.get("bytes") or 2048),
+                file_size_formatted=size_fmt,
+                uploaded_by=f"{prov_title} Agent",
+                uploaded_by_role="Connector Pipeline",
+                project_id=project_id,
+                status="Indexed in Vector Memory",
+                risks_detected=has_risk,
+                accuracy_score=final_acc,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.db_session.add(doc_record)
+            ingested_count += 1
+
+            if has_risk:
+                from models.risk_register import RiskRegister
+                clean_rid = f"R-{item_id}" if not item_id.startswith("R-") else item_id
+                existing_risk = db.db_session.query(RiskRegister).filter(
+                    RiskRegister.project_id == project_id,
+                    (RiskRegister.risk_id == clean_rid) | (RiskRegister.jira_issue_key == item_id)
+                ).first()
+                if not existing_risk:
+                    new_r = RiskRegister(
+                        project_id=project_id,
+                        risk_id=clean_rid,
+                        title=title,
+                        description=desc,
+                        severity="Critical" if priority_val in ["Critical", "Blocker"] else "High",
+                        status="Open",
+                        owner=f"{prov_title} Synced",
+                        mitigation_plan=f"Ingested from live {prov_title} ticket {item_id}. Prioritize in sprint backlog.",
+                        jira_issue_key=item_id if provider == "jira" else None,
+                        created_at=datetime.now(timezone.utc)
+                    )
+                    db.db_session.add(new_r)
+
+            from models.task_item import TaskItem
+            if provider in ["jira", "azure_devops"]:
+                existing_task = db.db_session.query(TaskItem).filter(
+                    TaskItem.project_id == project_id,
+                    TaskItem.jira_key == item_id
+                ).first()
+                if not existing_task:
+                    new_task = TaskItem(
+                        project_id=project_id,
+                        jira_key=item_id,
+                        summary=title,
+                        status=status_val,
+                        priority=priority_val,
+                        assignee=assignee_val,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc)
+                    )
+                    db.db_session.add(new_task)
+                else:
+                    existing_task.summary = title
+                    existing_task.status = status_val
+                    existing_task.priority = priority_val
+                    existing_task.assignee = assignee_val
+                    existing_task.updated_at = datetime.now(timezone.utc)
+
+    # Run the multi-agent AI pipeline on the primary anchor document if any document was ingested
+    if downloaded_doc_paths:
+        anchor_path = downloaded_doc_paths[0]
+        for p in downloaded_doc_paths:
+            p_lower = os.path.basename(p).lower()
+            if any(k in p_lower for k in ['sow', 'msa', 'charter']):
+                anchor_path = p
+                break
+
+        try:
+            ai_res = IngestionService.process_file(anchor_path, project_id=project_id)
+            if isinstance(ai_res, dict):
+                anchor_risks = ai_res.get('risks_detected', 0)
+                anchor_name = os.path.basename(anchor_path)
+                anchor_doc = db.db_session.query(UploadedDocument).filter(
+                    UploadedDocument.project_id == project_id,
+                    UploadedDocument.filename.like(f"%{anchor_name}%")
+                ).first()
+                if anchor_doc and anchor_risks:
+                    anchor_doc.risks_detected = anchor_risks
+        except Exception as ai_err:
+            print(f"[connectors/ingest] IngestionService error for anchor {anchor_path}: {ai_err}")
+
+    if provider in ["jira", "azure_devops"]:
+        from tools.jira_tool import JiraTool
+        try:
+            JiraTool.sync_project_telemetry(project_id)
+        except Exception:
+            pass
 
     db.db_session.commit()
 

@@ -85,26 +85,27 @@ def clean_numeric_str(val_str):
 def sync_uploaded_doc_telemetry(file_path, project_id):
     """
     Parses structured team ownership, milestones, budget/spend, delivery dates,
-    and governance telemetry from the uploaded document, and persists them permanently
-    into MySQL (project_members, project_milestones, budgets, task_items, project_telemetries).
+    and governance telemetry from ANY uploaded document (DOCX, PDF, XLSX, XLS, CSV),
+    and persists them permanently into MySQL (project_members, project_milestones, budgets, task_items, project_telemetries).
     """
     if not file_path or not project_id or not os.path.exists(file_path):
         return
-    if not file_path.lower().endswith('.docx'):
+    SUPPORTED_DOC_EXTENSIONS = ('.docx', '.pdf', '.xlsx', '.xls', '.csv', '.txt', '.json', '.md')
+    if not file_path.lower().endswith(SUPPORTED_DOC_EXTENSIONS):
         return
 
     try:
         import re
         from datetime import datetime, timezone
         import db
-        from docx import Document
+        from services.document_parser_service import extract_raw_tables_and_text, extract_budget_telemetry_from_tables, clean_numeric_str
         from models.project_member import ProjectMember
         from models.project_milestone import ProjectMilestone
         from models.budget import Budget
         from models.task_item import TaskItem
         from models.project_telemetry import ProjectTelemetry
 
-        doc = Document(file_path)
+        tables, paragraphs = extract_raw_tables_and_text(file_path)
         
         extracted_target_date = None
         extracted_overall_status = None
@@ -112,9 +113,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         parsed_budget_actual = None
         parsed_budget_variance = None
 
-        # 1. First pass: Scan paragraphs and table cells for key project metadata (Go-Live date, Overall Status)
-        for para in doc.paragraphs[:15]:
-            p_text = para.text.strip()
+        # 1. First pass: Scan paragraphs for key project metadata (Go-Live date, Overall Status)
+        for p_text in paragraphs[:25]:
             if not p_text:
                 continue
             status_m = re.search(r'Status[:\s]+(GREEN|AMBER|RED|Active|On Track)', p_text, re.IGNORECASE)
@@ -124,15 +124,15 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
             if date_m and not extracted_target_date:
                 extracted_target_date = date_m.group(2).strip()
 
-        for table in doc.tables:
-            if not table.rows:
+        for table in tables:
+            if not table or len(table) < 2:
                 continue
-            headers = [c.text.strip().lower() for c in table.rows[0].cells]
+            headers = [str(c).strip().lower() for c in table[0]]
 
             # A. Metadata / Control table (Field, Value or Measure, Target)
             if any('field' in h or 'measure' in h or 'dimension' in h or 'document id' in h for h in headers):
-                for row in table.rows:
-                    cells = [c.text.strip() for c in row.cells]
+                for row in table[1:]:
+                    cells = [str(c).strip() for c in row]
                     if len(cells) >= 2:
                         k = cells[0].lower()
                         v = cells[1].strip()
@@ -157,8 +157,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                     elif 'variance' in h:
                         var_idx = idx
 
-                for row in table.rows[1:]:
-                    cells = [c.text.strip() for c in row.cells]
+                for row in table[1:]:
+                    cells = [str(c).strip() for c in row]
                     if len(cells) > max(app_idx, fore_idx):
                         first_cell = cells[0].lower()
                         if 'total' in first_cell or 'subtotal' in first_cell:
@@ -176,8 +176,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         cost_idx = idx
                         break
                 if cost_idx != -1:
-                    for row in table.rows[1:]:
-                        cells = [c.text.strip() for c in row.cells]
+                    for row in table[1:]:
+                        cells = [str(c).strip() for c in row]
                         if len(cells) > cost_idx:
                             first_cell = cells[0].lower()
                             if 'total' in first_cell:
@@ -193,8 +193,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                 alloc_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['alloc', 'share', 'util'])), -1)
                 account_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['accountability', 'responsibility', 'desc'])), -1)
 
-                for row in table.rows[1:]:
-                    cells = [c.text.strip() for c in row.cells]
+                for row in table[1:]:
+                    cells = [str(c).strip() for c in row]
                     m_name = ""
                     m_role = ""
                     m_contact = ""
@@ -272,8 +272,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                     elif any(k in h for k in ['tranche', 'amount', 'payment', 'value', 'price', 'cost', 'val', 'budget']) and tranche_idx == -1:
                         tranche_idx = idx
 
-                for row in table.rows[1:]:
-                    cells = [c.text.strip() for c in row.cells]
+                for row in table[1:]:
+                    cells = [str(c).strip() for c in row]
                     if len(cells) > m_idx and m_idx >= 0 and cells[m_idx]:
                         m_code = cells[m_idx]
                         if m_code.lower() in ('total', 'subtotal', 'milestone'):
@@ -344,8 +344,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
             elif 'workstream' in headers and any(any(k in h for k in ['completion', 'progress', 'status', 'pct']) for h in headers):
                 ws_idx = headers.index('workstream')
                 comp_idx = next(i for i, h in enumerate(headers) if any(k in h for k in ['completion', 'progress', 'status', 'pct']))
-                for row_idx, row in enumerate(table.rows[1:]):
-                    cells = [c.text.strip() for c in row.cells]
+                for row_idx, row in enumerate(table[1:]):
+                    cells = [str(c).strip() for c in row]
                     if len(cells) > max(ws_idx, comp_idx):
                         ws_title = cells[ws_idx]
                         if not ws_title or ws_title.lower() in ('total', 'subtotal', 'workstream'):
@@ -386,8 +386,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         elif any(k in h for k in ['assignee', 'owner']):
                             assign_idx = idx
                     
-                    for row_idx, row in enumerate(table.rows[1:]):
-                        cells = [c.text.strip() for c in row.cells]
+                    for row_idx, row in enumerate(table[1:]):
+                        cells = [str(c).strip() for c in row]
                         if len(cells) > title_idx and cells[title_idx]:
                             t_title = cells[title_idx]
                             if not t_title or t_title.lower() in ('total', 'subtotal', 'action', 'task', 'decision'):
@@ -430,8 +430,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                 mit_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['mitigation', 'remediation', 'treatment', 'control'])), -1)
 
                 if desc_idx != -1:
-                    for row_idx, row in enumerate(table.rows[1:]):
-                        cells = [c.text.strip() for c in row.cells]
+                    for row_idx, row in enumerate(table[1:]):
+                        cells = [str(c).strip() for c in row]
                         if len(cells) > desc_idx and cells[desc_idx]:
                             r_title = cells[desc_idx]
                             if not r_title or r_title.lower() in ('total', 'subtotal', 'risk', 'finding', 'item'):
@@ -465,6 +465,11 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                     created_at=datetime.now(timezone.utc)
                                 )
                                 db.db_session.add(new_risk_item)
+
+        # 1.5 Extract structured budget categories and line items
+        doc_budget = extract_budget_telemetry_from_tables(tables, paragraphs)
+        if doc_budget.get('categories_raw') and parsed_budget_planned is None:
+            parsed_budget_planned = sum(c['planned'] for c in doc_budget['categories_raw'])
 
         # 2. Update or Insert Budget record if extracted
         if parsed_budget_planned is not None:
@@ -518,6 +523,8 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
             "overall_status": extracted_overall_status or "Active",
             "team": team_payload,
             "milestones": milestones_payload,
+            "budget_categories": doc_budget.get('categories_raw', []),
+            "budget_line_items": doc_budget.get('line_items_raw', []),
             "governance": {
                 "vendor_sla_adherence": 96.8,
                 "compliance_audit_score": 92,

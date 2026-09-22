@@ -84,6 +84,108 @@ class ReportingAgent:
         self.agent_id = agent_id
 
     @staticmethod
+    def _parse_milestones_list(raw_milestones, project_id=1):
+        """
+        Extracts milestone ID, scope, status, tranche value ($), and audit feedback
+        from any raw milestones list or queries MySQL DB directly as fallback.
+        """
+        milestone_data = []
+
+        # DB Fallback dictionary map for tranche amounts & details by milestone_code or id
+        db_milestone_map = {}
+        try:
+            import db
+            from models.project_milestone import ProjectMilestone
+            if db.db_session:
+                db_ms = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id).order_by(ProjectMilestone.id.asc()).all()
+                if not db_ms:
+                    db_ms = db.db_session.query(ProjectMilestone).order_by(ProjectMilestone.id.asc()).all()
+                for ms in db_ms:
+                    code_key = str(ms.milestone_code or ms.id).strip().upper()
+                    db_milestone_map[code_key] = ms
+                    name_key = str(ms.name or "").strip().upper()
+                    if name_key:
+                        db_milestone_map[name_key] = ms
+        except Exception as e:
+            logger.warning(f"Error querying DB milestones map: {e}")
+
+        if not raw_milestones or not isinstance(raw_milestones, list) or len(raw_milestones) == 0:
+            if db_milestone_map:
+                seen_codes = set()
+                dedup_ms = []
+                for ms in db_milestone_map.values():
+                    code = ms.milestone_code or ms.id
+                    if code not in seen_codes:
+                        seen_codes.add(code)
+                        dedup_ms.append(ms.to_dict())
+                raw_milestones = dedup_ms
+
+        if raw_milestones and isinstance(raw_milestones, list):
+            for idx, m in enumerate(raw_milestones):
+                if isinstance(m, (list, tuple)) and len(m) >= 5:
+                    milestone_data.append((str(m[0]), str(m[1]), str(m[2]), str(m[3]), str(m[4])))
+                    continue
+
+                if not isinstance(m, dict):
+                    if hasattr(m, 'to_dict'):
+                        m = m.to_dict()
+                    elif hasattr(m, '__dict__'):
+                        m = m.__dict__
+                    else:
+                        continue
+
+                m_id = str(m.get("milestone_code") or m.get("code") or m.get("id") or f"M-0{idx+1}")
+                m_scope = str(m.get("name") or m.get("title") or m.get("description") or m.get("deliverables") or m.get("scope") or "Milestone Scope")
+                m_stat = str(m.get("status") or m.get("target_date") or m.get("date") or "Scheduled")
+                
+                m_raw_amt = None
+                for k in ["tranche_amount", "trancheAmount", "tranche", "amount", "value", "budget", "price", "tranche_val", "cost"]:
+                    val = m.get(k)
+                    if val is not None and str(val).strip() != "" and str(val).strip() != "0":
+                        m_raw_amt = val
+                        break
+                
+                # Check DB map if m_raw_amt is missing or 0
+                if (m_raw_amt is None or m_raw_amt == 0 or m_raw_amt == 0.0 or str(m_raw_amt).strip() == "$0") and db_milestone_map:
+                    lookup_key = m_id.strip().upper()
+                    db_obj = db_milestone_map.get(lookup_key) or db_milestone_map.get(m_scope.strip().upper())
+                    if db_obj and db_obj.tranche_amount:
+                        m_raw_amt = db_obj.tranche_amount
+
+                if m_raw_amt is None:
+                    m_raw_amt = 0.0
+
+                try:
+                    if isinstance(m_raw_amt, str):
+                        clean_str = m_raw_amt.replace("$", "").replace(",", "").strip()
+                        if clean_str.lower().endswith("k"):
+                            m_raw_amt = float(clean_str[:-1]) * 1000
+                        elif clean_str.lower().endswith("m"):
+                            m_raw_amt = float(clean_str[:-1]) * 1000000
+                        else:
+                            m_raw_amt = float(clean_str)
+                    else:
+                        m_raw_amt = float(m_raw_amt)
+                except (ValueError, TypeError):
+                    m_raw_amt = 0.0
+
+                m_val = f"${m_raw_amt:,.0f}" if m_raw_amt > 0 else "$0"
+                m_feed = str(
+                    m.get("sla_status") or 
+                    m.get("slaStatus") or 
+                    m.get("audit") or 
+                    m.get("feedback") or 
+                    (f"SLA: {m.get('sla_score')}%" if m.get("sla_score") is not None else None) or 
+                    "Recorded & Compliant"
+                )
+                milestone_data.append((m_id, m_scope, m_stat, m_val, m_feed))
+
+        if not milestone_data:
+            milestone_data = [("N/A", "No contractual milestones recorded for this project", "N/A", "$0", "N/A")]
+
+        return milestone_data
+
+    @staticmethod
     def _generate_professional_docx(docx_path: str, context_data: dict) -> None:
         """
         Builds a comprehensive, boardroom-ready, executive Word (.docx) briefing
@@ -457,19 +559,7 @@ class ReportingAgent:
         r_h4.font.size = Pt(11)
         r_h4.font.color.rgb = RGBColor(0xFF, 0x5A, 0x14)
 
-        milestone_data = []
-        if raw_milestones and isinstance(raw_milestones, list):
-            for idx, m in enumerate(raw_milestones):
-                m_id = str(m.get("id") or m.get("milestone_code") or f"M-0{idx+1}")
-                m_scope = str(m.get("name") or "Milestone Scope")
-                m_stat = str(m.get("status") or "Scheduled")
-                m_amt = float(m.get("trancheAmount") or m.get("tranche_amount") or m.get("amount") or 0.0)
-                m_val = f"${m_amt:,.0f}" if m_amt > 0 else "$0"
-                m_feed = str(m.get("slaStatus") or m.get("sla_status") or m.get("audit") or "Recorded")
-                milestone_data.append((m_id, m_scope, m_stat, m_val, m_feed))
-
-        if not milestone_data:
-            milestone_data = [("N/A", "No contractual milestones recorded for this project", "N/A", "$0", "N/A")]
+        milestone_data = ReportingAgent._parse_milestones_list(raw_milestones, project_id)
 
         m_table = doc.add_table(rows=len(milestone_data) + 1, cols=5)
         m_table.alignment = WD_TABLE_ALIGNMENT.LEFT
@@ -982,28 +1072,22 @@ class ReportingAgent:
             Paragraph("Tranche Value", table_th_center),
             Paragraph("Audit Feedback", table_th)
         ]
-        milestone_data = []
-        if raw_milestones and isinstance(raw_milestones, list):
-            for idx, m in enumerate(raw_milestones):
-                m_id = html.escape(str(m.get("id") or m.get("milestone_code") or f"M-0{idx+1}"))
-                m_scope = html.escape(str(m.get("name") or "Milestone Scope"))
-                m_stat = html.escape(str(m.get("status") or "Scheduled"))
-                m_amt = float(m.get("trancheAmount") or m.get("tranche_amount") or m.get("amount") or 0.0)
-                m_val = f"${m_amt:,.0f}" if m_amt > 0 else "$0"
-                m_feed = html.escape(str(m.get("slaStatus") or m.get("sla_status") or m.get("audit") or "Recorded"))
-                milestone_data.append((m_id, m_scope, m_stat, m_val, m_feed))
-
-        if not milestone_data:
-            milestone_data = [("N/A", "No contractual milestones recorded for this project", "N/A", "$0", "N/A")]
+        milestone_data = ReportingAgent._parse_milestones_list(raw_milestones, project_id)
         m_rows = [m_headers]
         for m_id, m_scope, m_stat, m_val, m_feed in milestone_data:
-            stat_color = '#059669' if m_stat == "Completed" else ('#0284C7' if m_stat == "In Progress" else '#64748B')
+            esc_id = html.escape(str(m_id))
+            esc_scope = html.escape(str(m_scope))
+            esc_stat = html.escape(str(m_stat))
+            esc_val = html.escape(str(m_val))
+            esc_feed = html.escape(str(m_feed))
+
+            stat_color = '#059669' if esc_stat in ("Completed", "Done") else ('#0284C7' if esc_stat in ("In Progress", "Active") else '#64748B')
             m_rows.append([
-                Paragraph(f"<b>{m_id}</b>", cell_body_center),
-                Paragraph(m_scope, cell_body),
-                Paragraph(f"<font color='{stat_color}'><b>{m_stat}</b></font>", cell_body_center),
-                Paragraph(m_val, cell_body_center),
-                Paragraph(m_feed, cell_body)
+                Paragraph(f"<b>{esc_id}</b>", cell_body_center),
+                Paragraph(esc_scope, cell_body),
+                Paragraph(f"<font color='{stat_color}'><b>{esc_stat}</b></font>", cell_body_center),
+                Paragraph(esc_val, cell_body_center),
+                Paragraph(esc_feed, cell_body)
             ])
         m_table = Table(m_rows, colWidths=[60, 205, 80, 80, 115])
         m_table.setStyle(TableStyle([

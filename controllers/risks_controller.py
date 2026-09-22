@@ -161,7 +161,7 @@ def push_risk_to_jira(risk_id):
             "message": res.get("message") or f"Jira ticket {jira_key_created} created successfully!",
             "jira_issue_key": jira_key_created,
             "jira_url": res.get("url"),
-            "risk": risk.to_dict()
+            "risk": enrich_risk_dict(risk, {proj.id: proj} if proj else None)
         })
     else:
         return jsonify({

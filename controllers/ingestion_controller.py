@@ -89,10 +89,12 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
     and persists them permanently into MySQL (project_members, project_milestones, budgets, task_items, project_telemetries).
     """
     if not file_path or not project_id or not os.path.exists(file_path):
-        return
+        return 0
     SUPPORTED_DOC_EXTENSIONS = ('.docx', '.pdf', '.xlsx', '.xls', '.csv', '.txt', '.json', '.md')
     if not file_path.lower().endswith(SUPPORTED_DOC_EXTENSIONS):
-        return
+        return 0
+
+    risks_count = 0
 
     try:
         import re
@@ -436,6 +438,9 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                             r_title = cells[desc_idx]
                             if not r_title or r_title.lower() in ('total', 'subtotal', 'risk', 'finding', 'item'):
                                 continue
+                            
+                            risks_count += 1
+                            
                             raw_id = cells[id_idx] if id_idx >= 0 and len(cells) > id_idx and cells[id_idx] else f"R-{project_id}-{row_idx+1}"
                             raw_sev = cells[sev_idx] if sev_idx >= 0 and len(cells) > sev_idx else "Medium"
                             raw_mit = cells[mit_idx] if mit_idx >= 0 and len(cells) > mit_idx else "Under review"
@@ -550,8 +555,10 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
             db.db_session.add(new_tel)
 
         db.db_session.commit()
+        return risks_count
     except Exception as e:
         print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
+        return risks_count
 
 @ingestion_bp.route('/upload', methods=['POST'])
 @require_roles('PMO', 'Project Manager', 'Program Director')
@@ -1015,7 +1022,7 @@ def ingest_connector_items():
                 print(f"[connectors/ingest] Vector indexing error for {clean_title}: {v_err}")
 
             # 2. Synchronize structured telemetry into MySQL (Team, Milestones, Budgets, Tasks, Telemetry)
-            sync_uploaded_doc_telemetry(file_path, project_id)
+            telemetry_risks = sync_uploaded_doc_telemetry(file_path, project_id)
 
             # 3. Save uploaded_documents record
             doc_record = UploadedDocument(
@@ -1027,7 +1034,7 @@ def ingest_connector_items():
                 uploaded_by_role="Connector Pipeline",
                 project_id=project_id,
                 status="Indexed in Vector Memory",
-                risks_detected=0,
+                risks_detected=telemetry_risks or 0,
                 accuracy_score=final_acc,
                 created_at=datetime.now(timezone.utc)
             )

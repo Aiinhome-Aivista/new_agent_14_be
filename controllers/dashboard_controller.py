@@ -1130,7 +1130,7 @@ def get_snapshot():
             },
             {
                 "title": "Active Risks",
-                "value": str(len(crit_ids) + len(high_ids) + len(med_ids)),
+                "value": str(len(crit_ids) + len(high_ids) + len(med_ids) + len(low_ids)),
                 "trend": "up" if len(crit_ids) > 0 else "neutral",
                 "trendLabel": f"{len(crit_ids)} Critical / {len(high_ids)} High"
             },
@@ -1652,10 +1652,11 @@ def get_project_details(project_id):
     # Query project risks from RiskRegister
     risks = db.db_session.query(RiskRegister).filter_by(project_id=project.id).all()
     
-    crit = [r.risk_id for r in risks if r.severity.capitalize() == 'Critical']
-    high = [r.risk_id for r in risks if r.severity.capitalize() == 'High']
-    med = [r.risk_id for r in risks if r.severity.capitalize() == 'Medium']
-    low = [r.risk_id for r in risks if r.severity.capitalize() == 'Low']
+    open_risks = [r for r in risks if r.status == "Open"]
+    crit = [r.risk_id for r in open_risks if r.severity.capitalize() == 'Critical']
+    high = [r.risk_id for r in open_risks if r.severity.capitalize() == 'High']
+    med = [r.risk_id for r in open_risks if r.severity.capitalize() == 'Medium']
+    low = [r.risk_id for r in open_risks if r.severity.capitalize() == 'Low']
 
     # Project-specific budget & burndown values queried from Budget model
     from models.budget import Budget
@@ -1751,7 +1752,7 @@ def get_project_details(project_id):
             },
             {
                 "title": "Active Risks",
-                "value": str(len(risks)),
+                "value": str(len(open_risks)),
                 "trend": "up" if len(crit) > 0 else "neutral",
                 "trendLabel": f"{len(crit)} Critical / {len(high)} High"
             },

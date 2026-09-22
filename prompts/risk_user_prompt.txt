@@ -1,11 +1,16 @@
 Project ID: {project_id}
-Context Data: 
-{context_data}
 
-Existing Risks:
+=== EXISTING REGISTERED PROJECT RISKS (USE FOR CROSS-DOCUMENT DEDUPLICATION) ===
 {current_risks}
 
-Analyze the provided context. Identify any new risks or updates to existing risks.
-Specifically call out any immediate escalations or showstopper blockers.
-Provide your response as a JSON object matching this schema:
+=== INGESTED DOCUMENT CONTEXT & TABLES ===
+{context_data}
+
+Analyze the provided context and tables using Tree-of-Thoughts reasoning.
+1. Perform cross-document semantic deduplication: if any risk or finding matches or evolves an existing project risk, REUSE its existing canonical ID (e.g. RSK-001) and update its title, description, and mitigation plan.
+2. If genuinely new, assign a new canonical ID in format RSK-### (e.g., RSK-001, RSK-002, ...).
+3. NEVER use raw document codes ('SEC-022', 'R-01', etc.) as risk title or description. Synthesize executive-grade titles and descriptions.
+4. Specifically call out any immediate escalations or showstopper blockers.
+
+Provide your response as a valid JSON object matching this schema:
 {schema}

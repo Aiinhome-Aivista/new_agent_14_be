@@ -4,9 +4,9 @@ from typing import List, Optional
 class RiskIssue(BaseModel):
     id: str = Field(..., description="Unique identifier for the risk/issue")
     title: str = Field(..., description="Short title of the risk/issue")
-    description: str = Field(..., description="Detailed description of the risk/issue")
-    severity: str = Field(..., description="Severity level: Low, Medium, High, Critical")
-    status: str = Field(..., description="Current status: Open, Mitigated, Closed")
+    description: str = Field(default="", description="Detailed description of the risk/issue")
+    severity: str = Field(default="Medium", description="Severity level: Low, Medium, High, Critical")
+    status: str = Field(default="Open", description="Current status: Open, Mitigated, Closed")
     mitigation_plan: Optional[str] = Field(None, description="Proposed or active mitigation steps")
 
 class RiskAgentInput(BaseModel):

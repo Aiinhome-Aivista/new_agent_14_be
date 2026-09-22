@@ -59,7 +59,7 @@ class RiskAgent(BaseAgent):
                     detected.append(r)
                 elif isinstance(r, str):
                     detected.append({
-                        "id": f"R-{100 + idx}",
+                        "id": f"RSK-{100 + idx:03d}",
                         "title": r,
                         "description": r,
                         "severity": "High",
@@ -102,25 +102,43 @@ class RiskAgent(BaseAgent):
         input_obj: RiskAgentInput = context["validated_input"]
         schema_json = RiskAgentOutput.model_json_schema()
         
-        prompt = get_risk_user_prompt().format(
-            project_id=input_obj.project_id,
-            context_data=input_obj.context_data,
-            current_risks=[r.model_dump() for r in input_obj.current_risks],
-            schema=json.dumps(schema_json, indent=2)
-        )
-        
+        # Format current registered risks for the prompt
+        if input_obj.current_risks:
+            existing_risks_text = "\n".join([
+                f"- [ID: {r.id}] Title: {r.title} | Severity: {r.severity} | Status: {r.status} | Description: {r.description}"
+                for r in input_obj.current_risks
+            ])
+        else:
+            existing_risks_text = "None (No existing project risks registered yet)"
+
         # Tree-of-Thoughts (ToT) multi-branch reasoning prompt
-        tot_prompt = f"""[Tree-of-Thoughts Multi-Branch Analysis]
+        tot_prompt = f"""[Tree-of-Thoughts Multi-Branch Risk & Audit Intelligence Analysis]
 Project ID: {input_obj.project_id}
-Context: {input_obj.context_data}
 
-Explore 3 distinct reasoning branches:
-- Branch 1 (Technical & Architecture): System latency, API bottlenecks, SSL/Infrastructure dependencies.
-- Branch 2 (Governance & Regulatory): Security audit findings, compliance gaps (PCI-DSS/IAM), steering policy violations.
-- Branch 3 (Vendor & Delivery Operations): Milestone schedule delays, contractor cost burn, SLA penalties.
+=== EXISTING REGISTERED PROJECT RISKS (USE FOR CROSS-DOCUMENT DEDUPLICATION) ===
+{existing_risks_text}
 
-Synthesize the strongest leaf nodes from all branches into high-confidence detected_risks, escalations, and blockers.
-Output JSON conforming to schema:
+=== INGESTED DOCUMENT CONTENT & TABLES ===
+{input_obj.context_data}
+
+TREE-OF-THOUGHTS REASONING DIRECTIVES:
+Branch 1 (Technical & Security Architecture):
+- Analyze architecture blueprints, security audit findings, access controls, IAM context, least-privilege tool allow-lists, telemetry minimization, and prompt injection isolation.
+- Synthesize technical control gaps into executive-level risk titles (NEVER use raw finding codes like 'SEC-021' or 'R-01' as title or description).
+
+Branch 2 (Governance & Regulatory Compliance):
+- Evaluate Steering Committee decisions, audit remediation targets, policy compliance, and data governance.
+
+Branch 3 (Vendor Delivery, Schedule & Operational Cost):
+- Examine milestone schedules, contractor variance, dependency bottlenecks, and SLA compliance.
+
+CROSS-DOCUMENT DEDUPLICATION & CANONICAL IDENTIFIERS (JIRA READY):
+- Compare each candidate risk against the 'EXISTING REGISTERED PROJECT RISKS'.
+- If the risk represents an existing project risk (e.g., identity integration delay appearing across multiple files), REUSE that risk's existing ID (e.g. 'RSK-001'), update its title/description with new technical specifics, and update its mitigation plan. Do NOT output a duplicate!
+- If the risk is genuinely NEW: assign a new canonical ID in format 'RSK-###' (e.g., RSK-001, RSK-002, RSK-003, ... ensuring no collision with existing IDs).
+- NEVER use document table numbers or raw codes ('R-01', 'SEC-022') as the risk ID, Title, or Description.
+
+Output strictly valid JSON conforming to schema:
 {json.dumps(schema_json, indent=2)}
 """
         
@@ -136,14 +154,14 @@ Output JSON conforming to schema:
         except Exception as exc:
             is_fallback = True
             logger.warning(f"[{self.agent_id}] High-tier LLM generation failed: {exc}, using fallback risk analysis")
-            fallback_risk_id = f"R-{int(time.time()) % 900 + 100}"
+            fallback_risk_id = f"RSK-{int(time.time()) % 900 + 100:03d}"
             response_text = json.dumps({
                 "detected_risks": [
                     {
                         "id": fallback_risk_id,
-                        "title": "Delivery & Architecture Risk",
+                        "title": "Delivery & Architecture Trajectory Risk",
                         "description": f"Identified in document analysis: {input_obj.context_data[:120]}...",
-                        "severity": "Critical",
+                        "severity": "High",
                         "status": "Open",
                         "mitigation_plan": "Escalate to PMO and establish mitigation sprint."
                     }

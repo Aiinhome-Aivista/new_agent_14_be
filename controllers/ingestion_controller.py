@@ -423,53 +423,10 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 )
                                 db.db_session.add(new_t)
 
-            # G. Risk Registers & Audit Findings Table
+            # G. Note: Risk Registers & Audit Findings are handled exclusively by the RiskAgent LLM pipeline
+            # to guarantee cross-document semantic deduplication, executive synthesis, and canonical IDs (RSK-###).
             elif any(any(k in h for k in ['risk', 'finding', 'threat']) for h in headers) or ('item' in headers and 'severity' in headers):
-                from models.risk_register import RiskRegister
-                id_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['id', 'code', 'number'])), -1)
-                desc_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['risk', 'finding', 'item', 'description'])), -1)
-                sev_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['severity', 'impact', 'level', 'likelihood'])), -1)
-                mit_idx = next((i for i, h in enumerate(headers) if any(k in h for k in ['mitigation', 'remediation', 'treatment', 'control'])), -1)
-
-                if desc_idx != -1:
-                    for row_idx, row in enumerate(table[1:]):
-                        cells = [str(c).strip() for c in row]
-                        if len(cells) > desc_idx and cells[desc_idx]:
-                            r_title = cells[desc_idx]
-                            if not r_title or r_title.lower() in ('total', 'subtotal', 'risk', 'finding', 'item'):
-                                continue
-                            
-                            risks_count += 1
-                            
-                            raw_id = cells[id_idx] if id_idx >= 0 and len(cells) > id_idx and cells[id_idx] else f"R-{project_id}-{row_idx+1}"
-                            raw_sev = cells[sev_idx] if sev_idx >= 0 and len(cells) > sev_idx else "Medium"
-                            raw_mit = cells[mit_idx] if mit_idx >= 0 and len(cells) > mit_idx else "Under review"
-
-                            final_sev = "Medium"
-                            if any(k in raw_sev.lower() for k in ['crit', 'blocker']):
-                                final_sev = "Critical"
-                            elif any(k in raw_sev.lower() for k in ['high', 'elevated', 'major']):
-                                final_sev = "High"
-                            elif any(k in raw_sev.lower() for k in ['low', 'minor']):
-                                final_sev = "Low"
-
-                            existing_r = db.db_session.query(RiskRegister).filter_by(project_id=project_id, risk_id=raw_id).first()
-                            if existing_r:
-                                existing_r.title = r_title
-                                existing_r.severity = final_sev
-                                existing_r.mitigation_plan = raw_mit
-                            else:
-                                new_risk_item = RiskRegister(
-                                    project_id=project_id,
-                                    risk_id=raw_id,
-                                    title=r_title,
-                                    description=r_title,
-                                    severity=final_sev,
-                                    status="Open",
-                                    mitigation_plan=raw_mit,
-                                    created_at=datetime.now(timezone.utc)
-                                )
-                                db.db_session.add(new_risk_item)
+                pass
 
         # 1.5 Extract structured budget categories and line items
         doc_budget = extract_budget_telemetry_from_tables(tables, paragraphs)
@@ -1195,7 +1152,20 @@ def ingest_connector_items():
                     RiskRegister.project_id == project_id,
                     (RiskRegister.risk_id == clean_rid) | (RiskRegister.jira_issue_key == item_id)
                 ).first()
-                if not existing_risk:
+                if not existing_risk and title:
+                    clean_t = title.strip().lower()
+                    all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+                    for pr in all_p_risks:
+                        pr_title = (pr.title or "").strip().lower()
+                        if pr_title == clean_t or (len(clean_t) > 12 and (clean_t in pr_title or pr_title in clean_t)):
+                            existing_risk = pr
+                            break
+
+                if existing_risk:
+                    existing_risk.title = title
+                    existing_risk.description = desc or existing_risk.description
+                    existing_risk.severity = "Critical" if priority_val in ["Critical", "Blocker"] else "High"
+                else:
                     new_r = RiskRegister(
                         project_id=project_id,
                         risk_id=clean_rid,

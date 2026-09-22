@@ -60,12 +60,49 @@ class IngestionService:
         def risk_wrapper(inputs):
             intake_out = inputs.get("intake", {})
             p_name = intake_out.get("project_name", f"Project {project_id}")
-            context = f"Project: {p_name}. Status: {intake_out.get('status', 'Active')}. Extracted risks: {json.dumps(intake_out.get('risks', []))}. Jira Issues: {json.dumps(jira_issues)}"
+            
+            # Extract complete document text and all tables for thorough risk intelligence
+            doc_content = ""
+            if file_path and os.path.exists(file_path):
+                try:
+                    from tools.doc_tool import DocTool
+                    doc_content = DocTool.parse_file(file_path)
+                except Exception as ex:
+                    logger.warning(f"Could not parse doc with DocTool in risk_wrapper: {ex}")
+
+            context = (
+                f"Project Name: {p_name}\n"
+                f"Project Status: {intake_out.get('status', 'Active')}\n"
+                f"Document Path: {file_path}\n"
+                f"Document Full Text and Tables:\n{doc_content if doc_content else json.dumps(intake_out.get('risks', []))}\n\n"
+                f"Active Jira Issues for Project:\n{json.dumps(jira_issues)}"
+            )
+            
+            # Fetch existing active project risks to give agent contextual awareness and enable deduplication
+            curr_risks = []
+            try:
+                if db.db_session:
+                    db_r = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+                    curr_risks = [
+                        {
+                            "id": r.risk_id,
+                            "title": r.title,
+                            "severity": r.severity or "Medium",
+                            "status": r.status or "Open",
+                            "description": r.description or r.title,
+                            "mitigation_plan": r.mitigation_plan or ""
+                        }
+                        for r in db_r
+                    ]
+            except Exception as e:
+                logger.warning(f"Error fetching existing risks for risk_wrapper: {e}")
+                curr_risks = []
+
             return risk_agent.execute({
                 "project_id": str(project_id),
                 "project_name": p_name,
                 "context_data": context,
-                "current_risks": [],
+                "current_risks": curr_risks,
                 "intake": intake_out
             })
             
@@ -98,11 +135,29 @@ class IngestionService:
         # 5. Reporting
         rep_agent = ReportingAgent()
         def reporting_wrapper(inputs):
+            # Pass all active project risks plus newly detected risks so executive report reflects whole project
+            detected = inputs.get("risk", {}).get("risks", [])
+            all_known = list(detected)
+            try:
+                if db.db_session:
+                    db_r = db.db_session.query(RiskRegister).filter_by(project_id=project_id, status="Open").all()
+                    for r in db_r:
+                        if not any(d.get("title", "").strip().lower() == r.title.strip().lower() for d in detected if isinstance(d, dict)):
+                            all_known.append({
+                                "id": r.risk_id,
+                                "title": r.title,
+                                "severity": r.severity or "Medium",
+                                "status": r.status or "Open",
+                                "description": r.description or r.title
+                            })
+            except Exception:
+                pass
+
             return rep_agent.execute({
                 "project_id": project_id,
                 "kpis": inputs.get("kpi", {}).get("kpis", []),
                 "financials": inputs.get("financial", {}),
-                "risks": inputs.get("risk", {}).get("risks", []),
+                "risks": all_known,
                 "predictive": inputs.get("predictive", {})
             })
             
@@ -135,25 +190,72 @@ class IngestionService:
                 db.db_session.commit()
             project_id = proj.id
 
+        # Allocate clean canonical ID RSK-### and semantically deduplicate
+        all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+        used_ids = {r.risk_id for r in all_p_risks}
+        
+        def get_next_canonical_id():
+            next_n = 1
+            while f"RSK-{next_n:03d}" in used_ids:
+                next_n += 1
+            new_id = f"RSK-{next_n:03d}"
+            used_ids.add(new_id)
+            return new_id
+
         for idx, r in enumerate(detected_risks):
-            r_id = r.get("id") if isinstance(r, dict) and r.get("id") else f"R-{random.randint(100, 999)}"
             r_title = r.get("title") if isinstance(r, dict) and r.get("title") else str(r)
+            if not r_title or r_title.lower() in ('total', 'subtotal', 'risk', 'finding', 'item', 'n/a'):
+                continue
+
+            r_id = r.get("id") if isinstance(r, dict) and r.get("id") else None
             r_desc = r.get("description") if isinstance(r, dict) and r.get("description") else r_title
             r_sev = r.get("severity", "Medium") if isinstance(r, dict) else "Medium"
             r_status = r.get("status", "Open") if isinstance(r, dict) else "Open"
             r_mitigation = r.get("mitigation_plan", "") if isinstance(r, dict) else "Under PM review"
-            
-            existing = db.db_session.query(RiskRegister).filter_by(project_id=project_id, risk_id=r_id).first()
-            if existing:
-                existing.title = r_title
-                existing.description = r_desc
-                existing.severity = r_sev
-                existing.status = r_status
-                existing.mitigation_plan = r_mitigation
+
+            # Normalize severity
+            if any(k in str(r_sev).lower() for k in ['crit', 'blocker']):
+                r_sev = "Critical"
+            elif any(k in str(r_sev).lower() for k in ['high', 'elevated', 'major']):
+                r_sev = "High"
+            elif any(k in str(r_sev).lower() for k in ['low', 'minor']):
+                r_sev = "Low"
             else:
+                r_sev = "Medium"
+            
+            # 1. Match by exact canonical risk_id if valid
+            existing = None
+            if r_id and not any(r_id.upper().startswith(p) for p in ['R-1-', 'R-0', 'SEC-', 'FINDING-']):
+                existing = db.db_session.query(RiskRegister).filter_by(project_id=project_id, risk_id=r_id).first()
+            
+            # 2. If not matched by ID, check for match by normalized title or semantic containment
+            if not existing and r_title:
+                clean_t = r_title.strip().lower()
+                for pr in all_p_risks:
+                    pr_title = (pr.title or "").strip().lower()
+                    if pr_title == clean_t or (len(clean_t) > 12 and (clean_t in pr_title or pr_title in clean_t)):
+                        existing = pr
+                        break
+
+            if existing:
+                # Update existing risk details without creating a duplicate record
+                existing.title = r_title
+                existing.description = r_desc or existing.description
+                existing.severity = r_sev or existing.severity
+                existing.status = r_status or existing.status
+                if r_mitigation and r_mitigation != "Under PM review":
+                    existing.mitigation_plan = r_mitigation
+            else:
+                # Assign clean canonical ID RSK-###
+                if not r_id or any(r_id.upper().startswith(p) for p in ['R-1-', 'R-0', 'SEC-', 'FINDING-']) or r_id in used_ids:
+                    assigned_id = get_next_canonical_id()
+                else:
+                    assigned_id = r_id
+                    used_ids.add(assigned_id)
+
                 new_risk = RiskRegister(
                     project_id=project_id,
-                    risk_id=r_id,
+                    risk_id=assigned_id,
                     title=r_title,
                     description=r_desc,
                     severity=r_sev,
@@ -161,6 +263,8 @@ class IngestionService:
                     mitigation_plan=r_mitigation
                 )
                 db.db_session.add(new_risk)
+                all_p_risks.append(new_risk)
+        db.db_session.commit()
                 
         # Enqueue escalations if detected
         escalations = risk_output.get("escalations", [])
@@ -224,6 +328,18 @@ class IngestionService:
             snapshot_data["ai_processing_status"] = ai_proc_status
             snapshot_data["jira_synced"] = jira_data.get("success", False)
             snapshot_data["jira_issues_count"] = len(jira_issues)
+
+            # Ensure snapshot reflects all current active project risks in RiskRegister
+            all_db_open = db.db_session.query(RiskRegister).filter_by(project_id=project_id, status="Open").all()
+            total_active = len(all_db_open)
+            crit_active = sum(1 for r in all_db_open if r.severity == "Critical")
+            high_active = sum(1 for r in all_db_open if r.severity == "High")
+            
+            if "kpis" in snapshot_data and isinstance(snapshot_data["kpis"], list):
+                for kpi in snapshot_data["kpis"]:
+                    if kpi.get("title") == "Active Risks":
+                        kpi["value"] = str(total_active)
+                        kpi["trendLabel"] = f"{crit_active} Critical / {high_active} High"
 
             # Dynamic Milestone Attainment & Tranche Handling
             intake_milestones = final_state.get("intake", {}).get("milestones", [])

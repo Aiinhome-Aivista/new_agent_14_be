@@ -761,8 +761,8 @@ def build_dynamic_burndown(project, total_planned, total_actual, db_session=None
         completed_tasks = sum(1 for t in db_tasks if t.status in ["Done", "Completed", "Resolved"])
         ev_ratio = completed_tasks / total_tasks if total_tasks > 0 else 0.0
         return [
-            {"sprint": "Sprint 1", "planned": int(pl_k * 0.5), "actual": ac_k if ac_k > 0 else None, "earned": int(pl_k * ev_ratio), "is_current": True},
-            {"sprint": "Sprint 2", "planned": pl_k, "actual": None, "earned": None, "is_current": False}
+            {"sprint": "Sprint 1", "planned": int(total_planned * 0.5), "actual": total_actual if total_actual > 0 else None, "earned": int(total_planned * ev_ratio), "is_current": True},
+            {"sprint": "Sprint 2", "planned": total_planned, "actual": None, "earned": None, "is_current": False}
         ]
 
     return []

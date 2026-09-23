@@ -1015,19 +1015,19 @@ def get_snapshot():
             except Exception:
                 pass
 
-    # Determine primary completion percentage dynamically
+    # Determine primary completion percentage dynamically using multi-vector aggregation
+    valid_pcts = []
     if db_total_tasks > 0:
-        comp_percentage = task_pct
-        comp_basis = "Task Backlog"
-        comp_label = f"{db_completed_tasks}/{db_total_tasks} Tasks Completed ({task_pct}%)"
-    elif ms_total > 0:
-        comp_percentage = ms_avg_pct
-        comp_basis = "Contract Milestones"
-        comp_label = f"{ms_completed}/{ms_total} Milestones Verified ({ms_avg_pct}%)"
-    elif timeline_total_months > 0 and timeline_pct > 0:
-        comp_percentage = timeline_pct
-        comp_basis = "Timeline Horizon"
-        comp_label = f"{timeline_elapsed_months}/{timeline_total_months} Months Elapsed ({timeline_pct}%)"
+        valid_pcts.append(task_pct)
+    if ms_total > 0:
+        valid_pcts.append(ms_avg_pct)
+    if timeline_total_months > 0 and timeline_pct > 0:
+        valid_pcts.append(timeline_pct)
+
+    if valid_pcts:
+        comp_percentage = int(round(sum(valid_pcts) / len(valid_pcts)))
+        comp_basis = "Multi-Vector Aggregated"
+        comp_label = f"Multi-Vector Completion ({comp_percentage}%)"
     else:
         comp_percentage = 0
         comp_basis = "Initial Phase"
@@ -1899,22 +1899,22 @@ def get_project_details(project_id):
             except Exception:
                 pass
 
+    valid_pcts = []
     if db_total > 0:
-        overall_comp = task_pct
-        comp_basis = "Task Backlog"
-        comp_sub = f"{db_completed}/{db_total} Tasks ({task_pct}%)"
-    elif ms_total > 0:
-        overall_comp = ms_avg_pct
-        comp_basis = "Contract Milestones"
-        comp_sub = f"{ms_completed}/{ms_total} Milestones ({ms_avg_pct}%)"
-    elif timeline_total_months > 0 and timeline_pct > 0:
-        overall_comp = timeline_pct
-        comp_basis = "Timeline Horizon"
-        comp_sub = f"{timeline_elapsed_months}/{timeline_total_months} Months ({timeline_pct}%)"
+        valid_pcts.append(task_pct)
+    if ms_total > 0:
+        valid_pcts.append(ms_avg_pct)
+    if timeline_total_months > 0 and timeline_pct > 0:
+        valid_pcts.append(timeline_pct)
+
+    if valid_pcts:
+        overall_comp = int(round(sum(valid_pcts) / len(valid_pcts)))
+        comp_basis = "Multi-Vector Aggregated"
+        comp_sub = f"Multi-Vector Completion ({overall_comp}%)"
     else:
         overall_comp = 0
         comp_basis = "Initial Phase"
-        comp_sub = "0% Initial Phase (Awaiting SOW / Task Ingestion)"
+        comp_sub = "0% Project Kickoff (Awaiting SOW / Tasks)"
 
     project_data["completion_summary"] = {
         "percentage": overall_comp,

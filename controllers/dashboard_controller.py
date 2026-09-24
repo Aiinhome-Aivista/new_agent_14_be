@@ -1771,6 +1771,9 @@ def get_project_details(project_id):
     sorted_project_risks = sorted(risks, key=proj_risk_sort_key)
     enriched_project_risks = [enrich_risk_dict(r, {project.id: project}) for r in sorted_project_risks]
 
+    # Query actual tasks to return in the details payload
+    db_tasks_all = db.db_session.query(TaskItem).filter_by(project_id=project.id).all() if db.db_session else []
+
     project_data = {
         "id": project.jira_key,
         "numeric_id": project.id,
@@ -1787,7 +1790,8 @@ def get_project_details(project_id):
         ],
         "risk_details": enriched_project_risks,
         "recent_risks": enriched_project_risks[:5],
-        "total_project_risks": len(risks)
+        "total_project_risks": len(risks),
+        "tasks": [t.to_dict() for t in db_tasks_all]
     }
 
     team_data = get_project_team_data(project.id)

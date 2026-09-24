@@ -22,14 +22,18 @@ class ChatService:
                 logger.warning(f"RAG retrieval error in stream_chat: {rag_err}")
                 context = ""
 
+            if not context.strip():
+                context = "[NO PROGRAM KNOWLEDGE FOUND IN DATABASE. YOU MUST NOT INVENT, GUESS, OR USE TEMPLATES. YOU MUST DECLINE TO ANSWER BECAUSE YOU LACK PROJECT CONTEXT.]"
+
             prompt = f"""Program Knowledge & Context:
 {context}
 
 User Query: {query}
 
 Instructions:
-Provide a clear, user-friendly, and professional answer in natural language using clean bullet points and concise paragraphs.
-Do NOT output JSON or braces. Output plain natural language directly."""
+1. Provide a clear, user-friendly, and professional answer.
+2. NEVER use placeholders like [Project Name] or [Redacted]. If you don't know the answer, say "I don't have enough information in the project documents to answer that."
+3. Do NOT output JSON or braces. Output plain natural language directly."""
             system = get_chat_system_prompt()
 
             for token in llm.stream_generate(prompt, system=system, tier="mid"):

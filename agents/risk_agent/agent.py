@@ -138,7 +138,8 @@ CROSS-DOCUMENT DEDUPLICATION & CANONICAL IDENTIFIERS (JIRA READY):
 - If the risk is genuinely NEW: assign a new canonical ID in format 'RSK-###' (e.g., RSK-001, RSK-002, RSK-003, ... ensuring no collision with existing IDs).
 - NEVER use document table numbers or raw codes ('R-01', 'SEC-022') as the risk ID, Title, or Description.
 
-Output strictly valid JSON conforming to schema:
+Output ONLY a valid JSON object containing the actual data matching the schema below. Do NOT output the schema definition itself.
+Schema Reference:
 {json.dumps(schema_json, indent=2)}
 """
         

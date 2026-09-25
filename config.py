@@ -21,6 +21,10 @@ class Config:
     encoded_password = urllib.parse.quote_plus(DB_PASSWORD)
     SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+    }
 
     # LLM Tiering
     LLM_API_URL = os.getenv('LLM_API_URL', 'http://122.163.121.176:3041/api/generate')

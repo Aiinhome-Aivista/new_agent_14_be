@@ -132,26 +132,34 @@ class OneDriveTool:
                 docs = []
                 for it in items:
                     if "file" in it:
-                        size_mb = round(it.get('size', 0) / (1024 * 1024), 2)
+                        size_bytes = it.get('size', 2048)
+                        size_mb = round(size_bytes / (1024 * 1024), 2)
                         docs.append({
+                            "id": it.get("id"),
                             "name": it.get("name"),
                             "size": f"{size_mb} MB",
+                            "bytes": size_bytes,
                             "last_modified": it.get("lastModifiedDateTime", "")[:10],
-                            "source": "Microsoft OneDrive"
+                            "source": "Microsoft OneDrive",
+                            "parent_folder": "root"
                         })
                     elif "folder" in it and it.get("id"):
                         # Also inspect subfolder (e.g., 'Agent 14' folder)
                         try:
-                            f_resp = requests.get(f"https://graph.microsoft.com/v1.0/me/drive/items/{it['id']}/children", headers=headers, timeout=6)
+                            f_resp = requests.get(f"https://graph.microsoft.com/v1.0/me/drive/items/{it['id']}/children", headers=headers, timeout=10)
                             if f_resp.status_code == 200:
                                 for sub_it in f_resp.json().get("value", []):
                                     if "file" in sub_it:
-                                        s_mb = round(sub_it.get('size', 0) / (1024 * 1024), 2)
+                                        s_bytes = sub_it.get('size', 2048)
+                                        s_mb = round(s_bytes / (1024 * 1024), 2)
                                         docs.append({
+                                            "id": sub_it.get("id"),
                                             "name": sub_it.get("name"),
                                             "size": f"{s_mb} MB",
+                                            "bytes": s_bytes,
                                             "last_modified": sub_it.get("lastModifiedDateTime", "")[:10],
-                                            "source": f"Microsoft OneDrive ({it.get('name')})"
+                                            "source": f"Microsoft OneDrive ({it.get('name')})",
+                                            "parent_folder": it.get("name")
                                         })
                         except Exception:
                             pass
@@ -231,28 +239,85 @@ class OneDriveTool:
     def download_file(file_name_or_id: str, dest_path: str, project_id=None) -> bool:
         """
         Downloads a file from Microsoft OneDrive into dest_path (strictly within uploads/ directory).
-        Supports Microsoft Graph API content streaming with uploads/ fallback.
+        Supports Microsoft Graph API item ID content streaming, recursive folder discovery, and path-based lookups.
         """
         import os
+        import re
+        import urllib.parse
         uploads_dir = os.path.join(os.getcwd(), 'uploads')
         os.makedirs(uploads_dir, exist_ok=True)
 
         if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
             return True
 
+        base_name = os.path.basename(dest_path)
+        clean_target_name = file_name_or_id or base_name
+
         drive_url, account_email, api_token = OneDriveTool.get_credentials(project_id=project_id)
         if api_token and not api_token.startswith("DEMO"):
             headers = {"Authorization": f"Bearer {api_token}"}
-            url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_name_or_id}/content"
+
+            # 1. Direct Graph API Item ID content download
             try:
+                url = f"https://graph.microsoft.com/v1.0/me/drive/items/{clean_target_name}/content"
                 resp = requests.get(url, headers=headers, stream=True, timeout=30)
                 if resp.status_code == 200:
                     with open(dest_path, 'wb') as f:
                         for chunk in resp.iter_content(chunk_size=8192):
                             f.write(chunk)
                     return True
-                # Path-based lookup fallback
-                alt_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{file_name_or_id}:/content"
+            except Exception as e:
+                logger.warning(f"OneDrive direct item download failed for {clean_target_name}: {e}")
+
+            # 2. Dynamic Discovery: Search root & subfolders for matching document name
+            try:
+                r_root = requests.get("https://graph.microsoft.com/v1.0/me/drive/root/children", headers=headers, timeout=10)
+                target_names = {
+                    clean_target_name.strip().lower(),
+                    base_name.strip().lower(),
+                    re.sub(r'\s*\(\d+\)', '', clean_target_name).strip().lower(),
+                    re.sub(r'\s*\(\d+\)', '', base_name).strip().lower()
+                }
+
+                found_item_id = None
+
+                if r_root.status_code == 200:
+                    root_items = r_root.json().get("value", [])
+                    for it in root_items:
+                        it_name = (it.get("name") or "").strip().lower()
+                        if "file" in it and (it_name in target_names or any(t in it_name for t in target_names)):
+                            found_item_id = it.get("id")
+                            break
+                        elif "folder" in it and it.get("id"):
+                            # Search inside subfolder (e.g., 'Agent 14')
+                            try:
+                                sub_r = requests.get(f"https://graph.microsoft.com/v1.0/me/drive/items/{it['id']}/children", headers=headers, timeout=10)
+                                if sub_r.status_code == 200:
+                                    for sub_it in sub_r.json().get("value", []):
+                                        sub_name = (sub_it.get("name") or "").strip().lower()
+                                        if "file" in sub_it and (sub_name in target_names or any(t in sub_name for t in target_names)):
+                                            found_item_id = sub_it.get("id")
+                                            break
+                            except Exception:
+                                pass
+                        if found_item_id:
+                            break
+
+                if found_item_id:
+                    dl_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{found_item_id}/content"
+                    dl_resp = requests.get(dl_url, headers=headers, stream=True, timeout=30)
+                    if dl_resp.status_code == 200:
+                        with open(dest_path, 'wb') as f:
+                            for chunk in dl_resp.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        return True
+            except Exception as e:
+                logger.warning(f"OneDrive folder traversal download failed for {clean_target_name}: {e}")
+
+            # 3. Path-based lookup fallback
+            try:
+                encoded_name = urllib.parse.quote(base_name)
+                alt_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{encoded_name}:/content"
                 resp_alt = requests.get(alt_url, headers=headers, stream=True, timeout=30)
                 if resp_alt.status_code == 200:
                     with open(dest_path, 'wb') as f:
@@ -260,16 +325,17 @@ class OneDriveTool:
                             f.write(chunk)
                     return True
             except Exception as e:
-                logger.warning(f"OneDrive Graph API download failed for {file_name_or_id}: {e}")
+                logger.warning(f"OneDrive path-based download failed for {base_name}: {e}")
 
         # Fallback check in uploads/ folder only
-        base_name = os.path.basename(dest_path)
         existing_in_uploads = os.path.join(uploads_dir, base_name)
         if os.path.exists(existing_in_uploads) and os.path.getsize(existing_in_uploads) > 0:
+            if existing_in_uploads != dest_path:
+                import shutil
+                shutil.copyfile(existing_in_uploads, dest_path)
             return True
 
         # Normalize duplicate suffixes like ' (1)' in filename
-        import re
         norm_name = re.sub(r'\s*\(\d+\)', '', base_name)
         norm_path = os.path.join(uploads_dir, norm_name)
         if os.path.exists(norm_path) and os.path.getsize(norm_path) > 0:

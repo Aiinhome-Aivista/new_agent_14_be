@@ -423,10 +423,115 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                                 )
                                 db.db_session.add(new_t)
 
-            # G. Note: Risk Registers & Audit Findings are handled exclusively by the RiskAgent LLM pipeline
-            # to guarantee cross-document semantic deduplication, executive synthesis, and canonical IDs (RSK-###).
+            # G. Risk Registers & Audit Findings Table Extraction
             elif any(any(k in h for k in ['risk', 'finding', 'threat']) for h in headers) or ('item' in headers and 'severity' in headers):
-                pass
+                from models.risk_register import RiskRegister
+                
+                id_idx = -1
+                item_idx = -1
+                sev_idx = -1
+                mit_idx = -1
+                
+                for idx, h in enumerate(headers):
+                    if any(k in h for k in ['id', 'code', 'ref', 'key', 'number']):
+                        if id_idx == -1: id_idx = idx
+                    elif any(k in h for k in ['item', 'title', 'summary', 'description', 'risk', 'finding', 'threat']):
+                        if item_idx == -1: item_idx = idx
+                    elif any(k in h for k in ['severity', 'impact', 'level', 'priority']):
+                        if sev_idx == -1: sev_idx = idx
+                    elif any(k in h for k in ['mitigation', 'action', 'resolution', 'response', 'plan']):
+                        if mit_idx == -1: mit_idx = idx
+
+                all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+                used_rids = {r.risk_id for r in all_p_risks}
+                
+                for row_idx, row in enumerate(table[1:]):
+                    cells = [str(c).strip() for c in row]
+                    if not any(cells):
+                        continue
+                    
+                    r_id_raw = cells[id_idx] if id_idx >= 0 and len(cells) > id_idx else ""
+                    r_title = cells[item_idx] if item_idx >= 0 and len(cells) > item_idx else (cells[0] if len(cells) > 0 else "")
+                    if not r_title or r_title.lower() in ('total', 'subtotal', 'item', 'risk', 'n/a'):
+                        continue
+                    
+                    r_sev_raw = cells[sev_idx] if sev_idx >= 0 and len(cells) > sev_idx else "High"
+                    r_mit = cells[mit_idx] if mit_idx >= 0 and len(cells) > mit_idx else "Under PM Review"
+                    
+                    # Normalize severity
+                    r_sev = "Medium"
+                    if any(k in r_sev_raw.lower() for k in ['crit', 'blocker']):
+                        r_sev = "Critical"
+                    elif any(k in r_sev_raw.lower() for k in ['high', 'elevated', 'major']):
+                        r_sev = "High"
+                    elif any(k in r_sev_raw.lower() for k in ['low', 'minor']):
+                        r_sev = "Low"
+
+                    # Assign or normalize risk ID
+                    assigned_rid = r_id_raw if (r_id_raw and len(r_id_raw) >= 3 and not r_id_raw.isdigit()) else None
+                    if not assigned_rid or assigned_rid in used_rids:
+                        next_n = 1
+                        while f"RSK-{next_n:03d}" in used_rids:
+                            next_n += 1
+                        assigned_rid = f"RSK-{next_n:03d}"
+                    used_rids.add(assigned_rid)
+
+                    # Deduplicate by title or ID
+                    existing_r = None
+                    clean_t = r_title.strip().lower()
+                    for pr in all_p_risks:
+                        pr_t = (pr.title or "").strip().lower()
+                        if pr.risk_id == assigned_rid or pr_t == clean_t or (len(clean_t) > 12 and (clean_t in pr_t or pr_t in clean_t)):
+                            existing_r = pr
+                            break
+
+                    if existing_r:
+                        existing_r.title = r_title
+                        existing_r.severity = r_sev
+                        if r_mit and r_mit != "Under PM Review":
+                            existing_r.mitigation_plan = r_mit
+                    else:
+                        new_r = RiskRegister(
+                            project_id=project_id,
+                            risk_id=assigned_rid,
+                            title=r_title,
+                            description=f"{r_title} (Extracted from {os.path.basename(file_path)})",
+                            severity=r_sev,
+                            status="Open",
+                            owner="Connector Sync",
+                            mitigation_plan=r_mit,
+                            created_at=datetime.now(timezone.utc)
+                        )
+                        db.db_session.add(new_r)
+                        all_p_risks.append(new_r)
+                    risks_count += 1
+
+        # Check paragraphs for structured risk patterns if no tabular risks found
+        if risks_count == 0:
+            from models.risk_register import RiskRegister
+            all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+            used_rids = {r.risk_id for r in all_p_risks}
+            for p in paragraphs:
+                p_m = re.search(r'\[?(RISK-[A-Za-z0-9\-]+)\]?[:\s]+([^\n\r]+)', p, re.IGNORECASE)
+                if p_m:
+                    p_rid = p_m.group(1).upper()
+                    p_title = p_m.group(2).strip()
+                    if not any(pr.risk_id == p_rid for pr in all_p_risks):
+                        new_r = RiskRegister(
+                            project_id=project_id,
+                            risk_id=p_rid,
+                            title=p_title[:255],
+                            description=p_title,
+                            severity="High",
+                            status="Open",
+                            owner="Connector Sync",
+                            mitigation_plan="Identified in document text",
+                            created_at=datetime.now(timezone.utc)
+                        )
+                        db.db_session.add(new_r)
+                        all_p_risks.append(new_r)
+                        used_rids.add(p_rid)
+                        risks_count += 1
 
         # 1.5 Extract structured budget categories and line items
         doc_budget = extract_budget_telemetry_from_tables(tables, paragraphs)
@@ -884,16 +989,16 @@ def fetch_connector_data():
         raw_docs = res.get("documents", [])
         for doc in raw_docs:
             items.append({
-                "id": doc.get("name"),
+                "id": doc.get("id") or doc.get("name"),
                 "title": doc.get("name"),
                 "type": doc.get("name", "").split('.')[-1].upper() if '.' in doc.get("name", "") else "M365",
                 "status": "In OneDrive Cloud",
                 "priority": doc.get("size", "Enterprise Asset"),
                 "size": doc.get("size"),
-                "bytes": 2048,
+                "bytes": doc.get("bytes", 2048),
                 "last_modified": doc.get("last_modified", "2026-09-11"),
                 "description": f"OneDrive enterprise document '{doc.get('name')}' for {proj_name}.",
-                "source": "Microsoft OneDrive"
+                "source": doc.get("source", "Microsoft OneDrive")
             })
 
     return jsonify({
@@ -1224,7 +1329,7 @@ def ingest_connector_items():
                     UploadedDocument.filename.like(f"%{anchor_name}%")
                 ).first()
                 if anchor_doc and anchor_risks:
-                    anchor_doc.risks_detected = anchor_risks
+                    anchor_doc.risks_detected = max(anchor_doc.risks_detected or 0, anchor_risks)
         except Exception as ai_err:
             print(f"[connectors/ingest] IngestionService error for anchor {anchor_path}: {ai_err}")
 

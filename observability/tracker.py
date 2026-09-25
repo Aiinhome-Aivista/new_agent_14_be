@@ -8,18 +8,30 @@ class AgentTracker:
         """
         Records agent execution metrics to MySQL.
         """
-        try:
-            log_entry = AgentRunLog(
-                agent_id=agent_id,
-                session_id=session_id,
-                status=status,
-                latency_ms=latency_ms,
-                tokens_used=tokens_used,
-                error_message=error_message
-            )
-            db.db_session.add(log_entry)
-            db.db_session.commit()
-            app_logger.info(f"Agent run logged for {agent_id} (status: {status})")
-        except Exception as e:
-            app_logger.error(f"Failed to log agent run: {str(e)}")
-            db.db_session.rollback()
+        from sqlalchemy.exc import OperationalError
+
+        for attempt in range(2):
+            try:
+                log_entry = AgentRunLog(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    status=status,
+                    latency_ms=latency_ms,
+                    tokens_used=tokens_used,
+                    error_message=error_message
+                )
+                db.db_session.add(log_entry)
+                db.db_session.commit()
+                app_logger.info(f"Agent run logged for {agent_id} (status: {status})")
+                break
+            except OperationalError as e:
+                db.db_session.rollback()
+                db.db_session.remove() # Clears the dead session so the next attempt gets a fresh connection
+                if attempt == 0:
+                    app_logger.warning("MySQL connection was closed by remote host, retrying log insert...")
+                    continue
+                app_logger.error(f"Failed to log agent run after retry: {str(e)}")
+            except Exception as e:
+                app_logger.error(f"Failed to log agent run: {str(e)}")
+                db.db_session.rollback()
+                break

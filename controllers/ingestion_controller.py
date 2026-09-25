@@ -517,17 +517,20 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
         return risks_count
 
-def run_project_predictive_forecast(project_id: int):
+def run_project_predictive_forecast(project_id: int, document_path: str = None):
     """
     Automatically re-evaluates the project's financial trajectory and 
-    executes the Reflexion predictive loop right after document ingestion.
+    executes the Reflexion predictive loop right after document ingestion,
+    grounding future threat simulation in the ingested document context.
     """
     try:
         import db
+        import os
         from models.budget import Budget
         from models.risk_register import RiskRegister
         from models.project import Project
         from agents.predictive_agent.agent import PredictiveAgent
+        from tools.doc_tool import DocTool
 
         latest_b = db.db_session.query(Budget).filter_by(project_id=project_id).order_by(Budget.created_at.desc()).first()
         total_planned = float(latest_b.planned_spend) if latest_b else 0.0
@@ -550,11 +553,42 @@ def run_project_predictive_forecast(project_id: int):
             "financial_impact": float(r.financial_impact) if hasattr(r, 'financial_impact') and r.financial_impact else 0.0
         } for r in active_risks]
 
+        # Extract cumulative text from current ingested document and existing project documents
+        doc_snippets = []
+        if document_path and os.path.exists(document_path):
+            try:
+                main_txt = DocTool.parse_file(document_path)
+                if main_txt:
+                    doc_snippets.append(f"=== Active Document: {os.path.basename(document_path)} ===\n{main_txt[:2500]}")
+            except Exception as e:
+                print(f"[run_project_predictive_forecast] Doc parse warning: {e}")
+
+        if db.db_session:
+            from models.uploaded_document import UploadedDocument
+            all_docs = db.db_session.query(UploadedDocument).filter_by(project_id=project_id).order_by(UploadedDocument.id.desc()).limit(6).all()
+            for d in all_docs:
+                clean_fname = d.filename.split('] ')[-1] if '] ' in d.filename else d.filename
+                if document_path and os.path.basename(document_path) == clean_fname:
+                    continue
+                cand_path = os.path.join(os.getcwd(), 'uploads', clean_fname)
+                if os.path.exists(cand_path):
+                    try:
+                        d_txt = DocTool.parse_file(cand_path)
+                        if d_txt:
+                            doc_snippets.append(f"=== Project Reference Document: {clean_fname} ===\n{d_txt[:1500]}")
+                    except Exception:
+                        pass
+
+        full_doc_context = "\n\n".join(doc_snippets)
+        if full_doc_context and len(full_doc_context) > 6000:
+            full_doc_context = full_doc_context[:6000] + "\n...[Additional document history truncated for focus]"
+
         agent = PredictiveAgent()
         inputs = {
             "current_variance": float(current_variance),
             "risks": high_critical,
-            "project_status": f"Execution Phase ({proj_name})"
+            "project_status": f"Execution Phase ({proj_name})",
+            "document_context": full_doc_context or ""
         }
         pred_res = agent.execute(inputs)
 
@@ -702,7 +736,7 @@ def upload_file():
         sync_uploaded_doc_telemetry(file_path, valid_pid or project_id)
         
         # Automatically run Predictive Forecast on the ingested document context
-        auto_fc = run_project_predictive_forecast(valid_pid or project_id)
+        auto_fc = run_project_predictive_forecast(valid_pid or project_id, document_path=file_path)
         
         if isinstance(result, dict):
             result["document_id"] = doc_record.id
@@ -1238,7 +1272,8 @@ def ingest_connector_items():
     db.db_session.commit()
 
     # Automatically run Predictive Forecast on the updated project context
-    auto_fc = run_project_predictive_forecast(project_id)
+    anchor_doc = downloaded_doc_paths[0] if downloaded_doc_paths else None
+    auto_fc = run_project_predictive_forecast(project_id, document_path=anchor_doc)
 
     return jsonify({
         "success": True,

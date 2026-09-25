@@ -5,6 +5,7 @@ class PredictiveInput(BaseModel):
     current_variance: float
     risks: List[dict]
     project_status: str
+    document_context: str = ""
 
 class PredictiveOutput(BaseModel):
     forecasted_variance: float

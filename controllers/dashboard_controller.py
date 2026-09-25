@@ -2263,12 +2263,38 @@ def get_forecast():
                     "financial_impact": float(r.financial_impact) if hasattr(r, 'financial_impact') and r.financial_impact else 0.0
                 })
 
+        # Extract grounding document context from project's uploaded documents
+        doc_snippets = []
+        if db.db_session and target_pid:
+            try:
+                import os
+                from models.uploaded_document import UploadedDocument
+                from tools.doc_tool import DocTool
+                all_docs = db.db_session.query(UploadedDocument).filter_by(project_id=target_pid).order_by(UploadedDocument.id.desc()).limit(6).all()
+                for d in all_docs:
+                    clean_fname = d.filename.split('] ')[-1] if '] ' in d.filename else d.filename
+                    cand_path = os.path.join(os.getcwd(), 'uploads', clean_fname)
+                    if os.path.exists(cand_path):
+                        try:
+                            d_txt = DocTool.parse_file(cand_path)
+                            if d_txt:
+                                doc_snippets.append(f"=== Project Document: {clean_fname} ===\n{d_txt[:1500]}")
+                        except Exception:
+                            pass
+            except Exception as d_err:
+                print(f"[get_forecast] Document parse warning: {d_err}")
+
+        full_doc_context = "\n\n".join(doc_snippets)
+        if full_doc_context and len(full_doc_context) > 6000:
+            full_doc_context = full_doc_context[:6000] + "\n...[Additional document history truncated for focus]"
+
         # --- Call PredictiveAgent ---
         agent = PredictiveAgent()
         inputs = {
             "current_variance": float(current_variance),
             "risks": high_critical_risks,
-            "project_status": project_status_label
+            "project_status": project_status_label,
+            "document_context": full_doc_context or ""
         }
         
         result = agent.execute(inputs)

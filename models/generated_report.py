@@ -16,7 +16,7 @@ class GeneratedReport(Base):
     file_path = Column(String(500), nullable=False)
     summary = Column(Text, nullable=True)
     generated_by = Column(String(100), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.now)
 
     project = relationship('Project', backref='reports')
 

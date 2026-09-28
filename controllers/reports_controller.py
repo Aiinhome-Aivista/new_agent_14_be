@@ -11,13 +11,88 @@ from models.generated_report import GeneratedReport
 reports_bp = Blueprint('reports', __name__)
 logger = logging.getLogger(__name__)
 
+def _sync_disk_reports_to_db():
+    """
+    Self-healing reconciler: Ensures any valid report files created on disk
+    (e.g., during pipeline ingestion or background jobs) are registered in the database.
+    """
+    try:
+        import re
+        reports_dir = os.path.join(os.getcwd(), 'reports')
+        if not os.path.exists(reports_dir):
+            reports_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'reports')
+        if not os.path.exists(reports_dir):
+            return
+
+        disk_files = [f for f in os.listdir(reports_dir) if f.lower().endswith(('.pdf', '.docx'))]
+        if not disk_files:
+            return
+
+        existing_filenames = {r[0] for r in db.db_session.query(GeneratedReport.filename).all()}
+        needs_commit = False
+
+        # Ensure existing records have their created_at synchronized with local disk time
+        for rep in db.db_session.query(GeneratedReport).all():
+            if rep.filename:
+                full_path = os.path.join(reports_dir, rep.filename)
+                if os.path.exists(full_path):
+                    st = os.stat(full_path)
+                    local_time = datetime.fromtimestamp(min(st.st_ctime, st.st_mtime))
+                    if not rep.created_at or abs((rep.created_at - local_time).total_seconds()) > 60:
+                        rep.created_at = local_time
+                        needs_commit = True
+
+        for fname in disk_files:
+            if fname not in existing_filenames:
+                full_path = os.path.join(reports_dir, fname)
+                match = re.search(r'PRJ_(\d+)_', fname, re.IGNORECASE)
+                pid = int(match.group(1)) if match else 1
+
+                proj = db.db_session.query(Project).filter_by(id=pid).first()
+                if not proj:
+                    proj = db.db_session.query(Project).first()
+                    pid = proj.id if proj else 1
+
+                file_stat = os.stat(full_path)
+                mtime = datetime.fromtimestamp(min(file_stat.st_ctime, file_stat.st_mtime))
+                kb = file_stat.st_size / 1024
+                sz_str = f"{kb:.1f} KB" if kb < 1024 else f"{(kb/1024):.2f} MB"
+                is_pdf = fname.lower().endswith('.pdf')
+
+                rep = GeneratedReport(
+                    project_id=pid,
+                    name=fname,
+                    filename=fname,
+                    file_type='pdf' if is_pdf else 'docx',
+                    report_type='Executive PDF Briefing' if is_pdf else 'Enterprise Word (.docx)',
+                    file_size=sz_str,
+                    file_path=full_path,
+                    summary="Autonomous executive briefing covering cross-program milestone metrics, risk logs, and financial burn.",
+                    generated_by="Autonomous Reporting Agent (Ingestion Pipeline)",
+                    created_at=mtime
+                )
+                db.db_session.add(rep)
+                existing_filenames.add(fname)
+                needs_commit = True
+
+        if needs_commit:
+            db.db_session.commit()
+    except Exception as e:
+        logger.warning(f"Disk report sync reconciler warning: {e}")
+        try:
+            db.db_session.rollback()
+        except Exception:
+            pass
+
+
 @reports_bp.route('/list', methods=['GET'])
 def list_reports():
     """
-    Returns only reports that are explicitly tracked in the database.
-    If the database is truncated or empty, returns an empty list [].
+    Returns reports tracked in the database, automatically reconciling
+    any newly generated disk report files into the database.
     """
     try:
+        _sync_disk_reports_to_db()
         project_id_param = request.args.get('project_id')
         query = db.db_session.query(GeneratedReport)
 
@@ -74,78 +149,85 @@ def download_report(identifier):
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'reports', report.filename)
             ])
 
-        # Always ensure report file is freshly generated with latest boardroom layout
-        logger.info(f"Ensuring fresh report generation for '{report.filename}'...")
-        try:
-            import json
-            import shutil
-            from agents.reporting_agent.agent import ReportingAgent
-            from models.risk_register import RiskRegister
-            from models.budget import Budget
-            from models.dashboard_snapshot import DashboardSnapshot
+        found_path = None
+        for cp in candidate_paths:
+            if cp and os.path.exists(cp):
+                found_path = cp
+                break
 
-            project_id = report.project_id or 1
-            proj = db.db_session.query(Project).filter_by(id=project_id).first()
-            project_name = proj.name if proj else f"Project #{project_id}"
+        # If physical file is missing from server storage, automatically regenerate it on the fly
+        if not found_path:
+            logger.info(f"Report file missing from storage. Regenerating on-the-fly for '{report.filename}'...")
+            try:
+                import json
+                import shutil
+                from agents.reporting_agent.agent import ReportingAgent
+                from models.risk_register import RiskRegister
+                from models.budget import Budget
+                from models.dashboard_snapshot import DashboardSnapshot
 
-            snapshot = db.db_session.query(DashboardSnapshot).order_by(DashboardSnapshot.created_at.desc()).first()
-            snap_data = snapshot.data if snapshot else {}
-            if isinstance(snap_data, str):
-                try:
-                    snap_data = json.loads(snap_data)
-                except Exception:
-                    snap_data = {}
+                project_id = report.project_id or 1
+                proj = db.db_session.query(Project).filter_by(id=project_id).first()
+                project_name = proj.name if proj else f"Project #{project_id}"
 
-            risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
-            budget_row = db.db_session.query(Budget).filter_by(project_id=project_id).order_by(Budget.created_at.desc()).first()
-            budget_planned = float(budget_row.planned_spend) if budget_row else 0.0
-            budget_actual = float(budget_row.actual_spend) if budget_row else 0.0
-
-            from controllers.dashboard_controller import calculate_dynamic_health_score, get_project_db_telemetry
-            health_score = calculate_dynamic_health_score(proj, budget_planned, budget_actual, risks, db.db_session)
-            telemetry = get_project_db_telemetry(project_id) or {}
-            milestones = telemetry.get('milestones', []) if isinstance(telemetry, dict) else []
-
-            rep_agent = ReportingAgent()
-            res = rep_agent.execute({
-                "project_id": project_id,
-                "project_name": project_name,
-                "kpis": snap_data.get("kpis", []),
-                "financials": {
-                    "budget_planned": budget_planned,
-                    "budget_actual": budget_actual
-                },
-                "milestones": milestones,
-                "risks": [r.to_dict() for r in risks],
-                "predictive": {
-                    "confidence_score": health_score
-                }
-            })
-
-            is_pdf = report.filename.lower().endswith('.pdf')
-            gen_path = res.get("pdf_path") if is_pdf else res.get("docx_path")
-            if gen_path and os.path.exists(gen_path):
-                target_dest = report.file_path or os.path.join(os.getcwd(), 'reports', report.filename)
-                if gen_path != target_dest:
+                snapshot = db.db_session.query(DashboardSnapshot).order_by(DashboardSnapshot.created_at.desc()).first()
+                snap_data = snapshot.data if snapshot else {}
+                if isinstance(snap_data, str):
                     try:
-                        shutil.copy2(gen_path, target_dest)
-                        found_path = target_dest
+                        snap_data = json.loads(snap_data)
                     except Exception:
+                        snap_data = {}
+
+                risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+                budget_row = db.db_session.query(Budget).filter_by(project_id=project_id).order_by(Budget.created_at.desc()).first()
+                budget_planned = float(budget_row.planned_spend) if budget_row else 0.0
+                budget_actual = float(budget_row.actual_spend) if budget_row else 0.0
+
+                from controllers.dashboard_controller import calculate_dynamic_health_score, get_project_db_telemetry
+                health_score = calculate_dynamic_health_score(proj, budget_planned, budget_actual, risks, db.db_session)
+                telemetry = get_project_db_telemetry(project_id) or {}
+                milestones = telemetry.get('milestones', []) if isinstance(telemetry, dict) else []
+
+                rep_agent = ReportingAgent()
+                res = rep_agent.execute({
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "kpis": snap_data.get("kpis", []),
+                    "financials": {
+                        "budget_planned": budget_planned,
+                        "budget_actual": budget_actual
+                    },
+                    "milestones": milestones,
+                    "risks": [r.to_dict() for r in risks],
+                    "predictive": {
+                        "confidence_score": health_score
+                    }
+                })
+
+                is_pdf = report.filename.lower().endswith('.pdf')
+                gen_path = res.get("pdf_path") if is_pdf else res.get("docx_path")
+                if gen_path and os.path.exists(gen_path):
+                    target_dest = report.file_path or os.path.join(os.getcwd(), 'reports', report.filename)
+                    if gen_path != target_dest:
+                        try:
+                            shutil.copy2(gen_path, target_dest)
+                            found_path = target_dest
+                        except Exception:
+                            found_path = gen_path
+                    else:
                         found_path = gen_path
-                else:
-                    found_path = gen_path
-                report.file_path = found_path
-                try:
-                    db.db_session.commit()
-                except Exception:
-                    db.db_session.rollback()
-        except Exception as regen_err:
-            logger.error(f"Failed to regenerate report: {regen_err}", exc_info=True)
-            if candidate_paths:
-                for cp in candidate_paths:
-                    if cp and os.path.exists(cp):
-                        found_path = cp
-                        break
+                    report.file_path = found_path
+                    try:
+                        db.db_session.commit()
+                    except Exception:
+                        db.db_session.rollback()
+            except Exception as regen_err:
+                logger.error(f"Failed to regenerate report: {regen_err}", exc_info=True)
+                if candidate_paths:
+                    for cp in candidate_paths:
+                        if cp and os.path.exists(cp):
+                            found_path = cp
+                            break
 
         if not found_path or not os.path.exists(found_path):
             return jsonify({"error": "Report file is missing from server storage."}), 404
@@ -281,7 +363,7 @@ def generate_report():
         })
 
         created_records = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now()
 
         def format_size(path):
             try:

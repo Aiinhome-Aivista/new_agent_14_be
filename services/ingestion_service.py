@@ -13,6 +13,7 @@ import db
 from models.dashboard_snapshot import DashboardSnapshot
 from models.risk_register import RiskRegister
 from models.approval_queue import ApprovalQueue
+from models.generated_report import GeneratedReport
 
 class IngestionService:
     @staticmethod
@@ -357,6 +358,52 @@ class IngestionService:
             data=snapshot_data
         )
         db.db_session.add(snapshot)
+
+        # Register generated executive reports in database
+        reporting_output = final_state.get("reporting", {})
+        if reporting_output and db.db_session:
+            now_dt = datetime.now()
+
+            def format_report_size(path):
+                try:
+                    s = os.stat(path).st_size
+                    kb = s / 1024
+                    return f"{kb:.1f} KB" if kb < 1024 else f"{(kb/1024):.2f} MB"
+                except Exception:
+                    return "15.0 KB"
+
+            pdf_p = reporting_output.get("pdf_path")
+            pdf_fn = reporting_output.get("pdf_filename") or (os.path.basename(pdf_p) if pdf_p else None)
+            if pdf_p and os.path.exists(pdf_p):
+                db.db_session.add(GeneratedReport(
+                    project_id=project_id,
+                    name=pdf_fn,
+                    filename=pdf_fn,
+                    file_type='pdf',
+                    report_type='Executive PDF Briefing',
+                    file_size=format_report_size(pdf_p),
+                    file_path=pdf_p,
+                    summary=reporting_output.get("narrative_summary", ""),
+                    generated_by="Autonomous Reporting Agent (Ingestion Pipeline)",
+                    created_at=now_dt
+                ))
+
+            docx_p = reporting_output.get("docx_path")
+            docx_fn = reporting_output.get("docx_filename") or (os.path.basename(docx_p) if docx_p else None)
+            if docx_p and os.path.exists(docx_p):
+                db.db_session.add(GeneratedReport(
+                    project_id=project_id,
+                    name=docx_fn,
+                    filename=docx_fn,
+                    file_type='docx',
+                    report_type='Enterprise Word (.docx)',
+                    file_size=format_report_size(docx_p),
+                    file_path=docx_p,
+                    summary=reporting_output.get("narrative_summary", ""),
+                    generated_by="Autonomous Reporting Agent (Ingestion Pipeline)",
+                    created_at=now_dt
+                ))
+
         db.db_session.commit()
         
         return {

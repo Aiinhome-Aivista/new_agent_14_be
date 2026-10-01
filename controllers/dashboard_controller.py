@@ -270,22 +270,6 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                     JiraTool.sync_project_telemetry(active_project.id)
                 
                 # Fetch actual tasks from DB
-                completed_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["Done", "Completed", "Resolved"])
-                ).count()
-                in_prog_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["In Progress", "Active", "Open", "To Do"])
-                ).count()
-                review_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["In Review", "QA", "Review"])
-                ).count()
-                blocked_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["Blocked", "Impeded"])
-                ).count()
                 total_tasks = db.db_session.query(TaskItem).filter(
                     TaskItem.project_id == active_project.id
                 ).count()
@@ -314,22 +298,6 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 days_left = 0
                 sched_status = "Workspace Initialized"
                 from models.task_item import TaskItem
-                completed_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["Done", "Completed", "Resolved"])
-                ).count() if db.db_session else 0
-                in_prog_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["In Progress", "Active", "Open", "To Do"])
-                ).count() if db.db_session else 0
-                review_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["In Review", "QA", "Review"])
-                ).count() if db.db_session else 0
-                blocked_tasks = db.db_session.query(TaskItem).filter(
-                    TaskItem.project_id == active_project.id,
-                    TaskItem.status.in_(["Blocked", "Impeded"])
-                ).count() if db.db_session else 0
                 total_tasks = db.db_session.query(TaskItem).filter(
                     TaskItem.project_id == active_project.id
                 ).count() if db.db_session else 0
@@ -423,10 +391,6 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             sched_status = "Governed & On Track" if len(crit_ids) == 0 else f"{len(crit_ids)} Critical Risk Impeded"
                 
             from models.task_item import TaskItem
-            completed_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["Done", "Completed", "Resolved"])).count() if db.db_session else 0
-            in_prog_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["In Progress", "Active", "Open", "To Do"])).count() if db.db_session else 0
-            review_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["In Review", "QA", "Review"])).count() if db.db_session else 0
-            blocked_tasks = db.db_session.query(TaskItem).filter(TaskItem.status.in_(["Blocked", "Impeded"])).count() if db.db_session else 0
             total_tasks = db.db_session.query(TaskItem).count() if db.db_session else 0
 
             phases = []
@@ -435,6 +399,48 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
             valid_slas = [float(m.sla_score) for m in all_milestones if m.sla_score is not None]
             sla_adherence = round(sum(valid_slas) / len(valid_slas), 1) if valid_slas else 100.0
             audit_score = max(50, round(100.0 - (len(crit_ids) * 12.0 + len(high_ids) * 5.0)))
+
+    # Ensure perfect consistency between task metrics and list
+    task_items = []
+    completed_tasks = 0
+    in_prog_tasks = 0
+    review_tasks = 0
+    blocked_tasks = 0
+    
+    if db.db_session:
+        from models.task_item import TaskItem
+        if active_project:
+            db_tasks = db.db_session.query(TaskItem).filter_by(project_id=active_project.id).all()
+        else:
+            db_tasks = db.db_session.query(TaskItem).all()
+            
+        for t in db_tasks:
+            status_lower = t.status.lower() if t.status else ""
+            mapped_status = "In Progress"
+            if any(s in status_lower for s in ["done", "completed", "resolved"]):
+                mapped_status = "Completed"
+                completed_tasks += 1
+            elif any(s in status_lower for s in ["review", "qa"]):
+                mapped_status = "Under Review / QA"
+                review_tasks += 1
+            elif any(s in status_lower for s in ["block", "impede"]):
+                mapped_status = "Blocked / Impeded"
+                blocked_tasks += 1
+            else:
+                in_prog_tasks += 1
+                
+            task_items.append({
+                "id": t.jira_key or f"TSK-{t.id}",
+                "title": t.summary,
+                "status": mapped_status,
+                "priority": t.priority,
+                "owner": t.assignee or "Unassigned",
+                "workstream": "Development",
+                "due_date": "Active Sprint",
+                "linked_risk_id": None
+            })
+            
+    total_tasks = completed_tasks + in_prog_tasks + review_tasks + blocked_tasks
 
     remaining_budget = max(0.0, total_planned - total_actual)
     all_ms = phases if ('phases' in locals() and phases) else []
@@ -518,35 +524,7 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 "sla": f"{sla_adherence}%"
             })
 
-    task_items = []
-    if db.db_session:
-        from models.task_item import TaskItem
-        if active_project:
-            db_tasks = db.db_session.query(TaskItem).filter_by(project_id=active_project.id).all()
-        else:
-            db_tasks = db.db_session.query(TaskItem).all()
-            
-        for t in db_tasks:
-            # Map Jira status to dashboard grouped status for filtering
-            status_lower = t.status.lower() if t.status else ""
-            mapped_status = "In Progress"
-            if any(s in status_lower for s in ["done", "completed", "resolved"]):
-                mapped_status = "Completed"
-            elif any(s in status_lower for s in ["review", "qa"]):
-                mapped_status = "Under Review / QA"
-            elif any(s in status_lower for s in ["block", "impede"]):
-                mapped_status = "Blocked / Impeded"
-                
-            task_items.append({
-                "id": t.jira_key or f"TSK-{t.id}",
-                "title": t.summary,
-                "status": mapped_status,
-                "priority": t.priority,
-                "owner": t.assignee or "Unassigned",
-                "workstream": "Development", # Default for now
-                "due_date": "Active Sprint",
-                "linked_risk_id": None
-            })
+    # task_items is already populated consistently above
     if total_tasks > 0:
         task_breakdown = [
             {"name": "Completed", "count": completed_tasks, "percentage": round(completed_tasks / total_tasks * 100), "color": "#10B981"},

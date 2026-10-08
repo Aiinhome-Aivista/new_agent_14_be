@@ -40,15 +40,15 @@ def list_projects():
                 ac_val = float(budget.actual_spend)
                 var_val = float(budget.variance)
                 burn_pct = round((ac_val / pl_val * 100)) if pl_val > 0 else 0
-                pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.0f}K"
-                ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.0f}K"
+                pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.1f}K"
+                ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.1f}K"
                 b_summary = f"{ac_str} / {pl_str}"
             else:
-                pl_val = 1000000.0
+                pl_val = 0.0
                 ac_val = 0.0
-                var_val = pl_val
+                var_val = 0.0
                 burn_pct = 0
-                b_summary = "$0 / $1.0M"
+                b_summary = "$0.0K / $0.0K"
 
             # 2. Risk telemetry
             risks = db.db_session.query(RiskRegister).filter_by(project_id=p.id).all()
@@ -102,7 +102,7 @@ def create_project():
     jira_key = (data.get('jira_key') or data.get('project_code') or '').strip().upper()
     description = (data.get('description') or '').strip()
     status = (data.get('status') or 'Active').strip()
-    raw_budget = data.get('planned_spend', 1000000.0)
+    raw_budget = data.get('planned_spend', 0.0)
     project_manager_id = data.get('project_manager_id')
     if project_manager_id:
         try:
@@ -135,7 +135,7 @@ def create_project():
         try:
             planned_spend = float(raw_budget)
         except (ValueError, TypeError):
-            planned_spend = 1000000.0
+            planned_spend = 0.0
 
         # Create Project directly
         new_project = Project(
@@ -162,6 +162,7 @@ def create_project():
 
         db.db_session.commit()
 
+        p_pl_str = f"${planned_spend/1000000:.1f}M" if planned_spend >= 1000000 else f"${planned_spend/1000:.1f}K"
         p_dict = new_project.to_dict()
         p_dict.update({
             'health_score': 100,
@@ -169,7 +170,7 @@ def create_project():
             'actual_spend': 0.0,
             'variance': planned_spend,
             'burn_pct': 0,
-            'budget_summary': f"$0 / ${planned_spend/1000000:.1f}M" if planned_spend >= 1000000 else f"$0 / ${planned_spend/1000:.0f}K",
+            'budget_summary': f"$0.0K / {p_pl_str}",
             'critical_risks_count': 0,
             'high_risks_count': 0,
             'total_risks_count': 0,
@@ -202,16 +203,16 @@ def get_project(project_id):
     docs = db.db_session.query(UploadedDocument).filter_by(project_id=project.id).all()
 
     from controllers.dashboard_controller import calculate_dynamic_health_score
-    p_pl = float(budget.planned_spend) if budget else 1000000.0
+    p_pl = float(budget.planned_spend) if budget else 0.0
     p_ac = float(budget.actual_spend) if budget else 0.0
     health_score = calculate_dynamic_health_score(project, p_pl, p_ac, risks, db.db_session)
 
     res = project.to_dict()
     res.update({
         'health_score': health_score,
-        'planned_spend': float(budget.planned_spend) if budget else 1000000.0,
+        'planned_spend': float(budget.planned_spend) if budget else 0.0,
         'actual_spend': float(budget.actual_spend) if budget else 0.0,
-        'variance': float(budget.variance) if budget else 1000000.0,
+        'variance': float(budget.variance) if budget else 0.0,
         'risks': [r.to_dict() for r in risks],
         'documents': [d.to_dict() for d in docs]
     })
@@ -272,12 +273,12 @@ def update_project(project_id):
         
         # Build enriched response
         b = db.db_session.query(Budget).filter_by(project_id=project.id).order_by(Budget.created_at.desc()).first()
-        pl_val = float(b.planned_spend) if b else (updated_plan or 1000000.0)
+        pl_val = float(b.planned_spend) if b else (updated_plan or 0.0)
         ac_val = float(b.actual_spend) if b else 0.0
         var_val = float(b.variance) if b else pl_val
         burn_pct = round((ac_val / pl_val * 100)) if pl_val > 0 else 0
-        pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.0f}K"
-        ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.0f}K"
+        pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.1f}K"
+        ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.1f}K"
 
         p_dict = project.to_dict()
         p_dict.update({

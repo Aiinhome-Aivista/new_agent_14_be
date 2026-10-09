@@ -10,6 +10,25 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def format_budget_display(v):
+    """Formats monetary amounts cleanly: $0, $100K, $280K, $1M, $1.5M, $617"""
+    if v is None:
+        return "$0"
+    try:
+        v = float(v)
+    except (ValueError, TypeError):
+        return "$0"
+    if v == 0:
+        return "$0"
+    abs_v = abs(v)
+    if abs_v >= 1000000:
+        m = v / 1000000.0
+        return f"${m:.0f}M" if m.is_integer() else f"${m:.1f}M"
+    if abs_v >= 1000:
+        k = v / 1000.0
+        return f"${k:.0f}K" if k.is_integer() else f"${k:.1f}K"
+    return f"${round(v):,}"
+
 project_bp = Blueprint('projects', __name__)
 
 @project_bp.route('', methods=['GET'])
@@ -35,20 +54,20 @@ def list_projects():
         for p in projects:
             # 1. Budget telemetry
             budget = db.db_session.query(Budget).filter_by(project_id=p.id).order_by(Budget.created_at.desc()).first()
-            if budget:
-                pl_val = float(budget.planned_spend)
-                ac_val = float(budget.actual_spend)
-                var_val = float(budget.variance)
+            if budget and (float(budget.planned_spend or 0) > 0 or float(budget.actual_spend or 0) > 0):
+                pl_val = float(budget.planned_spend or 0)
+                ac_val = float(budget.actual_spend or 0)
+                var_val = float(budget.variance if budget.variance is not None else (pl_val - ac_val))
                 burn_pct = round((ac_val / pl_val * 100)) if pl_val > 0 else 0
-                pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.1f}K"
-                ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.1f}K"
+                pl_str = format_budget_display(pl_val)
+                ac_str = format_budget_display(ac_val)
                 b_summary = f"{ac_str} / {pl_str}"
             else:
                 pl_val = 0.0
                 ac_val = 0.0
                 var_val = 0.0
                 burn_pct = 0
-                b_summary = "$0.0K / $0.0K"
+                b_summary = "$0 / $0"
 
             # 2. Risk telemetry
             risks = db.db_session.query(RiskRegister).filter_by(project_id=p.id).all()
@@ -162,7 +181,6 @@ def create_project():
 
         db.db_session.commit()
 
-        p_pl_str = f"${planned_spend/1000000:.1f}M" if planned_spend >= 1000000 else f"${planned_spend/1000:.1f}K"
         p_dict = new_project.to_dict()
         p_dict.update({
             'health_score': 100,
@@ -170,7 +188,7 @@ def create_project():
             'actual_spend': 0.0,
             'variance': planned_spend,
             'burn_pct': 0,
-            'budget_summary': f"$0.0K / {p_pl_str}",
+            'budget_summary': f"$0 / {format_budget_display(planned_spend)}",
             'critical_risks_count': 0,
             'high_risks_count': 0,
             'total_risks_count': 0,
@@ -277,8 +295,9 @@ def update_project(project_id):
         ac_val = float(b.actual_spend) if b else 0.0
         var_val = float(b.variance) if b else pl_val
         burn_pct = round((ac_val / pl_val * 100)) if pl_val > 0 else 0
-        pl_str = f"${pl_val/1000000:.1f}M" if pl_val >= 1000000 else f"${pl_val/1000:.1f}K"
-        ac_str = f"${ac_val/1000000:.1f}M" if ac_val >= 1000000 else f"${ac_val/1000:.1f}K"
+        pl_str = format_budget_display(pl_val)
+        ac_str = format_budget_display(ac_val)
+        b_summary = f"{ac_str} / {pl_str}" if (pl_val > 0 or ac_val > 0) else "$0 / $0"
 
         p_dict = project.to_dict()
         p_dict.update({
@@ -286,7 +305,7 @@ def update_project(project_id):
             'actual_spend': ac_val,
             'variance': var_val,
             'burn_pct': burn_pct,
-            'budget_summary': f"{ac_str} / {pl_str}"
+            'budget_summary': b_summary
         })
 
         return jsonify({

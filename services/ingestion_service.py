@@ -32,6 +32,8 @@ class IngestionService:
 
         proj = db.db_session.query(Project).filter_by(id=project_id).first()
         jira_key = proj.jira_key if proj else f"PRJ-{project_id}"
+        if db.db_session:
+            db.db_session.remove()
         
         jira_data = JiraTool.execute(project_key=jira_key, project_id=project_id)
         jira_issues = jira_data.get("issues", [])

@@ -75,8 +75,19 @@ class Orchestrator:
             if not func or not name:
                 logger.error(f"Invalid task definition: {task}")
                 continue
-                
-            future = self.executor.submit(func, *args, **kwargs)
+
+            def _thread_worker(target_func, t_args, t_kwargs):
+                try:
+                    return target_func(*t_args, **t_kwargs)
+                finally:
+                    import db
+                    if getattr(db, 'db_session', None):
+                        try:
+                            db.db_session.remove()
+                        except Exception:
+                            pass
+
+            future = self.executor.submit(_thread_worker, func, args, kwargs)
             future_to_name[future] = name
 
         for future in concurrent.futures.as_completed(future_to_name):
@@ -174,6 +185,13 @@ class Orchestrator:
                         logger.error(f"[Orchestrator] Node {node_name} failed: {exc}", exc_info=True)
                         state[node_name] = {"error": str(exc)}
                         AgentTracker.log_run(agent_id=node_name, session_id=workflow_session_id, status="error", latency_ms=latency_ms, error_message=str(exc))
+                    finally:
+                        import db
+                        if getattr(db, 'db_session', None):
+                            try:
+                                db.db_session.remove()
+                            except Exception:
+                                pass
                 else:
                     logger.warning(f"[Orchestrator] No function registered for node {node_name}")
             else:
@@ -199,6 +217,13 @@ class Orchestrator:
                     err_msg = result.get("error") if status == "error" else None
                     AgentTracker.log_run(agent_id=node_name, session_id=workflow_session_id, status=status, latency_ms=batch_latency, error_message=err_msg)
 
+                import db
+                if getattr(db, 'db_session', None):
+                    try:
+                        db.db_session.remove()
+                    except Exception:
+                        pass
+
             # Determine next level
             next_level = []
             for node_name in current_level:
@@ -211,6 +236,12 @@ class Orchestrator:
             current_level = next_level
 
         app_logger.info(f"[Orchestrator] Workflow execution completed for session: {workflow_session_id}")
+        import db
+        if getattr(db, 'db_session', None):
+            try:
+                db.db_session.remove()
+            except Exception:
+                pass
         return state
 
 # Global instance for easy importing

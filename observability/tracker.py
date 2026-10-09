@@ -8,7 +8,7 @@ class AgentTracker:
         """
         Records agent execution metrics to MySQL.
         """
-        from sqlalchemy.exc import OperationalError
+        from sqlalchemy.exc import OperationalError, DBAPIError
 
         for attempt in range(2):
             try:
@@ -24,14 +24,23 @@ class AgentTracker:
                 db.db_session.commit()
                 app_logger.info(f"Agent run logged for {agent_id} (status: {status})")
                 break
-            except OperationalError as e:
-                db.db_session.rollback()
-                db.db_session.remove() # Clears the dead session so the next attempt gets a fresh connection
+            except (OperationalError, DBAPIError) as e:
+                try:
+                    db.db_session.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.db_session.remove() # Clears the dead session so the next attempt gets a fresh connection
+                except Exception:
+                    pass
                 if attempt == 0:
-                    app_logger.warning("MySQL connection was closed by remote host, retrying log insert...")
+                    app_logger.warning("MySQL connection drop detected, retrying log insert with fresh connection...")
                     continue
                 app_logger.error(f"Failed to log agent run after retry: {str(e)}")
             except Exception as e:
                 app_logger.error(f"Failed to log agent run: {str(e)}")
-                db.db_session.rollback()
+                try:
+                    db.db_session.rollback()
+                except Exception:
+                    pass
                 break

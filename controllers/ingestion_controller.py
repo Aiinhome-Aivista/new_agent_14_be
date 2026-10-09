@@ -853,6 +853,13 @@ def upload_file():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        import db
+        if getattr(db, 'db_session', None):
+            try:
+                db.db_session.remove()
+            except Exception:
+                pass
 
 @ingestion_bp.route('/history', methods=['GET'])
 @require_roles('PMO', 'Project Manager', 'Program Director', 'Investor')
@@ -884,6 +891,12 @@ def list_ingestion_history():
                 docs = [d.to_dict() for d in db_docs]
     except Exception as exc:
         print(f"Error querying uploaded_documents: {exc}")
+    finally:
+        if getattr(db, 'db_session', None):
+            try:
+                db.db_session.remove()
+            except Exception:
+                pass
 
     # ONLY return records that exist in the database (no filesystem fallback)
     return jsonify(docs)

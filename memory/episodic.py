@@ -13,16 +13,38 @@ class EpisodicMemory:
         """
         Records an event in the agent's episode timeline.
         """
-        episode = AgentEpisode(
-            agent_id=agent_id,
-            session_id=session_id,
-            event_type=event_type,
-            content=content,
-            metadata_json=metadata
-        )
-        db.db_session.add(episode)
-        db.db_session.commit()
-        return episode.to_dict()
+        from sqlalchemy.exc import OperationalError, DBAPIError
+
+        for attempt in range(2):
+            try:
+                episode = AgentEpisode(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    event_type=event_type,
+                    content=content,
+                    metadata_json=metadata
+                )
+                db.db_session.add(episode)
+                db.db_session.commit()
+                return episode.to_dict()
+            except (OperationalError, DBAPIError):
+                try:
+                    db.db_session.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.db_session.remove()
+                except Exception:
+                    pass
+                if attempt == 0:
+                    continue
+                return None
+            except Exception:
+                try:
+                    db.db_session.rollback()
+                except Exception:
+                    pass
+                return None
 
     @staticmethod
     def get_session_history(session_id: str, limit: int = 50):

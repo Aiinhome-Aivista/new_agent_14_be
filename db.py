@@ -4,6 +4,7 @@ import pymysql
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+import socket
 from config import Config
 
 engine = None
@@ -11,7 +12,17 @@ db_session = None
 Base = declarative_base()
 
 logger = logging.getLogger(__name__)
-logging.getLogger('sqlalchemy.pool').setLevel(logging.ERROR)
+
+class IgnoreResetErrorFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        if "Exception during reset or similar" in msg or "Lost connection to MySQL server" in msg:
+            return False
+        return True
+
+pool_logger = logging.getLogger('sqlalchemy.pool')
+pool_logger.setLevel(logging.ERROR)
+pool_logger.addFilter(IgnoreResetErrorFilter())
 
 def init_db(app):
     global engine, db_session
@@ -24,7 +35,7 @@ def init_db(app):
     db_name = app.config.get('DB_NAME', Config.DB_NAME)
 
     def resilient_connection_creator():
-        """Creates a PyMySQL connection with automatic retry logic against transient packet sequence drops."""
+        """Creates a PyMySQL connection with TCP KeepAlive, automatic retries, and resilient rollback against remote disconnects."""
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
@@ -34,12 +45,37 @@ def init_db(app):
                     user=db_user,
                     password=db_pass,
                     database=db_name,
-                    connect_timeout=25,
-                    read_timeout=30,
-                    write_timeout=30,
+                    connect_timeout=15,
+                    read_timeout=300,
+                    write_timeout=300,
                     charset='utf8mb4',
                     autocommit=False
                 )
+
+                # Enable TCP KeepAlive so remote firewall / NAT / MySQL server does not terminate idle connections
+                if getattr(conn, '_sock', None):
+                    try:
+                        conn._sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if hasattr(socket, 'SIO_KEEPALIVE_VALS'):
+                            # Windows keepalive: probe every 30s with 10s interval
+                            conn._sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 30000, 10000))
+                        elif hasattr(socket, 'TCP_KEEPIDLE'):
+                            conn._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                            conn._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                            conn._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                    except Exception as sock_err:
+                        logger.debug(f"Could not set socket keepalive: {sock_err}")
+
+                # Wrap conn.rollback to absorb dead socket errors during pool return/reset
+                orig_rollback = conn.rollback
+                def resilient_rollback():
+                    try:
+                        if getattr(conn, 'open', False):
+                            orig_rollback()
+                    except (pymysql.err.Error, ConnectionResetError, BrokenPipeError, OSError):
+                        pass
+
+                conn.rollback = resilient_rollback
                 return conn
             except Exception as e:
                 logger.warning(f"Database connection attempt {attempt}/{max_retries} failed: {e}")
@@ -53,7 +89,7 @@ def init_db(app):
         pool_size=10,
         max_overflow=20,
         pool_pre_ping=True,
-        pool_recycle=280,
+        pool_recycle=60,
         pool_timeout=30
     )
     db_session = scoped_session(sessionmaker(autocommit=False,

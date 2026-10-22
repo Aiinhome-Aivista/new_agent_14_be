@@ -1,3 +1,4 @@
+import json
 from flask import Blueprint, jsonify, request
 import db
 from models.integration_setting import IntegrationSetting
@@ -9,6 +10,7 @@ from tools.onedrive_tool import OneDriveTool
 from tools.sap_erp_tool import SapErpTool
 from tools.sharepoint_tool import SharePointTool
 from tools.notification_tool import NotificationTool
+from tools.custom_api_tool import CustomApiTool
 
 settings_bp = Blueprint('settings', __name__)
 
@@ -18,6 +20,18 @@ DEMO_PRESETS = {
         "base_url": "https://dipakkrsaha44.atlassian.net",
         "username_email": "dipakkrsaha44@gmail.com",
         "api_token": "ATATT3xFfGF0o2M-o3hxSh4XCKwBcrLO5EvrYYVjZ-DO60zGU6LuMpqMext-Uwy664taZSs1uS8ifdZaIHboUlaG1gKf5C_1rp6tUhYGt7S1G39ramjutsJwM9RrvvXG71mDV9nfXgRk8gcyPG3YBp1DMgYHOfaxkDJGQ0JQo63jr92dgdpGHIs=07F60D9C"
+    },
+    "custom_api": {
+        "provider": "custom_api",
+        "base_url": "https://jsonplaceholder.typicode.com/todos?_limit=5",
+        "username_email": "bearer",
+        "api_token": json.dumps({
+            "auth_type": "bearer",
+            "token": "DEMO_VPM_BEARER_TOKEN_2026",
+            "method": "GET",
+            "data_category": "tasks_and_milestones",
+            "custom_headers": {"X-Custom-Client": "VPM-Governance-v1"}
+        })
     },
     "sap_erp": {
         "provider": "sap_erp",
@@ -44,6 +58,7 @@ TOOL_MAP = {
     "azure_devops": AzureDevOpsTool,
     "google_drive": GoogleDriveTool,
     "onedrive": OneDriveTool,
+    "custom_api": CustomApiTool,
     "sap_erp": SapErpTool,
     "sharepoint": SharePointTool,
     "notifications": NotificationTool
@@ -67,7 +82,7 @@ def get_requested_project_id():
 def get_all_settings():
     """Fetches configuration state of enterprise connectors scoped by project_id."""
     project_id = get_requested_project_id()
-    providers = ["jira", "azure_devops", "google_drive", "onedrive", "sap_erp", "sharepoint", "notifications"]
+    providers = ["jira", "azure_devops", "google_drive", "onedrive", "custom_api", "sap_erp", "sharepoint", "notifications"]
     results = {}
     for prov in providers:
         setting = db.db_session.query(IntegrationSetting).filter_by(provider=prov, project_id=project_id).first()
@@ -117,7 +132,14 @@ def save_provider_settings(provider):
     project_id = get_requested_project_id()
     base_url = data.get("base_url", "").strip()
     email = data.get("username_email", "").strip()
-    token = data.get("api_token", "").strip()
+    token = data.get("api_token", "")
+    
+    # If custom_config dict is provided for custom_api, save as JSON string
+    custom_cfg = data.get("custom_config")
+    if provider == "custom_api" and isinstance(custom_cfg, dict):
+        token = json.dumps(custom_cfg)
+    elif isinstance(token, str):
+        token = token.strip()
     
     if not base_url:
         return jsonify({"success": False, "error": f"Base URL / Endpoint is required for {provider}."}), 400
@@ -145,10 +167,12 @@ def save_provider_settings(provider):
     import inspect
     if hasattr(tool, 'test_connection'):
         sig = inspect.signature(tool.test_connection)
+        test_kwargs = {}
         if 'project_id' in sig.parameters:
-            test_result = tool.test_connection(project_id=project_id)
-        else:
-            test_result = tool.test_connection()
+            test_kwargs['project_id'] = project_id
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            test_kwargs.update(data)
+        test_result = tool.test_connection(**test_kwargs)
     else:
         test_result = {"success": True}
 
@@ -164,7 +188,7 @@ def save_provider_settings(provider):
             "test_result": test_result
         })
     else:
-        # FAILED: Strictly reject and do NOT connect invalid / fake data
+        # FAILED: Strictly reject and do NOT connect invalid / unreachable endpoint
         setting.is_connected = False
         db.db_session.commit()
         err_msg = test_result.get("error") or "Authentication failed. Invalid credentials or server unreachable."
@@ -196,7 +220,14 @@ def test_provider_connection(provider):
     if "base_url" in data and data.get("base_url") is not None:
         setting.base_url = str(data["base_url"]).strip()
     if "api_token" in data and data.get("api_token") is not None:
-        setting.api_token = str(data["api_token"]).strip()
+        token_val = data["api_token"]
+        if isinstance(token_val, dict):
+            setting.api_token = json.dumps(token_val)
+        else:
+            setting.api_token = str(token_val).strip()
+    elif "custom_config" in data and isinstance(data["custom_config"], dict):
+        setting.api_token = json.dumps(data["custom_config"])
+
     if "username_email" in data and data.get("username_email") is not None:
         setting.username_email = str(data["username_email"]).strip()
     db.db_session.flush()
@@ -204,10 +235,12 @@ def test_provider_connection(provider):
     import inspect
     if hasattr(tool, 'test_connection'):
         sig = inspect.signature(tool.test_connection)
+        test_kwargs = {}
         if 'project_id' in sig.parameters:
-            result = tool.test_connection(project_id=project_id)
-        else:
-            result = tool.test_connection()
+            test_kwargs['project_id'] = project_id
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            test_kwargs.update(data)
+        result = tool.test_connection(**test_kwargs)
     else:
         result = {"success": True}
 
@@ -323,6 +356,23 @@ def sync_onedrive(project_id):
         return jsonify(res), 200
     else:
         return jsonify(res), 400
+
+@settings_bp.route('/sync-custom-api/<int:project_id>', methods=['POST'])
+@settings_bp.route('/custom_api/fetch-data', methods=['GET', 'POST'])
+@require_roles('PMO', 'Program Director')
+def sync_custom_api(project_id=None):
+    """
+    Executes live data retrieval from configured Custom REST API endpoint for a project.
+    """
+    if project_id is None:
+        project_id = get_requested_project_id()
+    from tools.custom_api_tool import CustomApiTool
+    res = CustomApiTool.fetch_data(project_id=project_id)
+    if res.get("success"):
+        return jsonify(res), 200
+    else:
+        return jsonify(res), 400
+
 
 
 

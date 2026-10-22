@@ -787,10 +787,14 @@ def get_snapshot():
         b = db.db_session.query(Budget).filter_by(project_id=p.id).order_by(Budget.created_at.desc()).first()
         if b:
             def _fmt(v):
-                v = float(v)
-                if abs(v) >= 10000000: return f"₹{v/10000000:.2f}Cr"
-                if abs(v) >= 100000: return f"₹{v/100000:.1f}L"
-                return f"₹{v:,.0f}"
+                if v is None: return "$0"
+                try: v = float(v)
+                except Exception: return "$0"
+                if 0 < abs(v) < 2000: v = v * 1000.0
+                abs_v = abs(v)
+                if abs_v >= 1000000: return f"${v/1000000:.2f}M" if (v/1000000) % 1 != 0 else f"${v/1000000:.0f}M"
+                if abs_v >= 1000: return f"${v/1000:.1f}K" if (v/1000) % 1 != 0 else f"${v/1000:.0f}K"
+                return f"${round(v):,}"
             pl = _fmt(b.planned_spend or 0)
             ac = _fmt(b.actual_spend or 0)
             b_str = f"Budget: {ac} / {pl}"
@@ -862,12 +866,24 @@ def get_snapshot():
     burn_pct = round((total_actual / total_planned * 100)) if total_planned > 0 else 0
 
     def fmt_m_val(val):
-        if abs(val) >= 10000000:
-            return f"₹{val / 10000000:.2f}Cr"
-        elif abs(val) >= 100000:
-            return f"₹{val / 100000:.1f}L"
-        else:
-            return f"₹{val:,.0f}"
+        if val is None:
+            return "$0"
+        try:
+            val = float(val)
+        except (ValueError, TypeError):
+            return "$0"
+        if 0 < abs(val) < 2000:
+            val = val * 1000.0
+        abs_v = abs(val)
+        if abs_v >= 1000000:
+            m = val / 1000000.0
+            return f"${m:.2f}M" if m % 1 != 0 else f"${m:.0f}M"
+        if abs_v >= 1000:
+            k = val / 1000.0
+            if k % 1 != 0 and abs_v < 1000000:
+                return f"${k:.1f}K"
+            return f"${k:.0f}K"
+        return f"${round(val):,}"
 
     total_budget_burn_str = f"{fmt_m_val(total_actual)} / {fmt_m_val(total_planned)}"
     sched_variance_str = f"{'+' if tot_variance >= 0 else '-'}{fmt_m_val(abs(tot_variance))} {'Surplus' if tot_variance >= 0 else 'Deficit'}"
@@ -1336,6 +1352,17 @@ def resolve_project_doc_file(filename):
         p = os.path.join('uploads', candidate)
         if os.path.exists(p) and p.lower().endswith(SUPPORTED_DOC_EXTENSIONS):
             return p
+    # Resilient fuzzy search in uploads folder
+    if os.path.exists('uploads'):
+        upload_files = os.listdir('uploads')
+        for uf in upload_files:
+            if uf.lower() == filename.lower() or uf.lower() == clean_name.lower():
+                return os.path.join('uploads', uf)
+        clean_lower = clean_name.lower()
+        for uf in upload_files:
+            uf_lower = uf.lower()
+            if any(k in clean_lower and k in uf_lower for k in ['sow', 'msa', 'steerco', 'mom', 'charter', 'weekly', 'architecture', 'audit', 'roster']):
+                return os.path.join('uploads', uf)
     return None
 
 def build_project_budget_details(project, planned_val, actual_val, cost_variance, burn_pct, phases, team_data):
@@ -1649,6 +1676,14 @@ def get_project_details(project_id):
         actual_val = 0.0
         cost_variance = 0.0
 
+    # Auto-scale legacy entries that were saved in thousands
+    if 0 < abs(planned_val) < 2000:
+        planned_val = planned_val * 1000.0
+    if 0 < abs(actual_val) < 2000:
+        actual_val = actual_val * 1000.0
+    if 0 < abs(cost_variance) < 2000:
+        cost_variance = cost_variance * 1000.0
+
     # Health score calculation dynamically calibrated
     health = calculate_dynamic_health_score(project, planned_val, actual_val, risks, db.db_session)
 
@@ -1656,7 +1691,24 @@ def get_project_details(project_id):
     burn_rate = f"{burn_pct}% Burned"
     
     def fmt_cur(val):
-        return f"${val / 1000000:.2f}M" if abs(val) >= 1000000 else f"${val / 1000:.0f}K"
+        if val is None:
+            return "$0"
+        try:
+            val = float(val)
+        except (ValueError, TypeError):
+            return "$0"
+        if 0 < abs(val) < 2000:
+            val = val * 1000.0
+        abs_v = abs(val)
+        if abs_v >= 1000000:
+            m = val / 1000000.0
+            return f"${m:.2f}M" if m % 1 != 0 else f"${m:.0f}M"
+        if abs_v >= 1000:
+            k = val / 1000.0
+            if k % 1 != 0 and abs_v < 1000000:
+                return f"${k:.1f}K"
+            return f"${k:.0f}K"
+        return f"${round(val):,}"
 
     planned_budget = fmt_cur(planned_val)
     actual_spend = fmt_cur(actual_val)
@@ -1759,6 +1811,12 @@ def get_project_details(project_id):
         "name": project.name,
         "status": project.status,
         "healthScore": health,
+        "financials": {
+            "totalBudget": planned_val,
+            "spent": actual_val,
+            "remaining": max(0.0, planned_val - actual_val),
+            "projectedVariance": cost_variance
+        },
         "kpis": kpi_list,
         "burndown": burndown,
         "risks": [

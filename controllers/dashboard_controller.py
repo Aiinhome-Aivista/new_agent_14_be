@@ -619,13 +619,27 @@ def calculate_dynamic_health_score(active_project, total_planned, total_actual, 
         overrun_ratio = (total_actual - total_planned) / total_planned
         score -= min(35.0, overrun_ratio * 50.0)
 
-    # 2. Risk Penalties
-    crit_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "Critical" and str(getattr(r, 'status', '')).capitalize() == "Open")
-    high_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "High" and str(getattr(r, 'status', '')).capitalize() == "Open")
-    med_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "Medium" and str(getattr(r, 'status', '')).capitalize() == "Open")
-    low_count = sum(1 for r in all_risks if str(getattr(r, 'severity', '')).capitalize() == "Low" and str(getattr(r, 'status', '')).capitalize() == "Open")
-    
-    score -= (crit_count * 15.0) + (high_count * 8.0) + (med_count * 3.0) + (low_count * 1.0)
+    # 2. Risk Penalties (with semantic deduplication to avoid compounding duplicate rows)
+    import re
+    unique_risks = []
+    seen_sigs = set()
+    for r in (all_risks or []):
+        r_t = getattr(r, 'title', '') or ''
+        clean_t = re.sub(r'[^\w\s]', '', r_t.lower()).strip()
+        if len(clean_t) < 5 or clean_t in ('item', 'none', 'task', 'risk'):
+            continue
+        words = [w for w in clean_t.split() if w not in ('the', 'a', 'an', 'in', 'of', 'for', 'to', 'due', 'and', 'from', 'with')]
+        sig = ' '.join(words[:4]) if len(words) >= 4 else clean_t
+        if any(sig in s or s in sig for s in seen_sigs):
+            continue
+        seen_sigs.add(sig)
+        unique_risks.append(r)
+
+    crit_count = sum(1 for r in unique_risks if str(getattr(r, 'severity', '')).capitalize() == "Critical" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    high_count = sum(1 for r in unique_risks if str(getattr(r, 'severity', '')).capitalize() == "High" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    med_count = sum(1 for r in unique_risks if str(getattr(r, 'severity', '')).capitalize() == "Medium" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    low_count = sum(1 for r in unique_risks if str(getattr(r, 'severity', '')).capitalize() == "Low" and str(getattr(r, 'status', '')).capitalize() == "Open")
+    score -= (crit_count * 8.0) + (high_count * 1.0) + (med_count * 0.5) + (low_count * 0.2)
 
     # 3. Task Impediments Penalty (up to 20 pts)
     if db_session and active_project:
@@ -1244,8 +1258,10 @@ def get_snapshot():
                     "timeline": m.target_date or "TBD",
                     "status": m.status or "Scheduled",
                     "trancheAmount": m.tranche_amount or 0,
+                    "tranche_amount": m.tranche_amount or 0,
                     "slaScore": m.sla_score,
-                    "deliverablesPercent": m.completion_pct or 0
+                    "deliverablesPercent": m.completion_pct or 0,
+                    "completion_pct": m.completion_pct or 0
                 } for m in p_db_milestones
             ]
         elif active_telem and active_telem.get('milestones'):
@@ -1577,27 +1593,43 @@ def build_project_budget_details(project, planned_val, actual_val, cost_variance
             line_items[-1]['variance'] = round(line_items[-1]['planned'] - line_items[-1]['actual'], 2)
 
     # Milestones breakdown: merge parsed SOW milestones with live execution progress from DB phases
+    # Milestones breakdown: merge parsed SOW milestones with live execution progress from DB phases
     milestone_breakdown = []
-    phases_by_code = {str(p.get('id', '')).upper(): p for p in (phases or [])}
-    if milestones_raw:
-        for ms in milestones_raw:
-            m_code = str(ms.get('id', '')).upper()
-            if m_code in phases_by_code:
-                p_match = phases_by_code[m_code]
-                ms['completion_pct'] = p_match.get('completion_pct', 0)
-                ms['target_date'] = p_match.get('target_date') or ms.get('target_date', 'Contract Governed')
-                ms['status'] = p_match.get('status', 'Scheduled')
-        source_milestones = milestones_raw
-    else:
-        source_milestones = phases or []
+    source_milestones = milestones_raw or phases or []
 
-    if source_milestones and len(source_milestones) > 0:
-        total_ms = len(source_milestones)
-        for idx, ms in enumerate(source_milestones):
-            m_id = ms.get('id') or ms.get('milestone_code') or f'M{idx+1}'
+    # Canonicalize and deduplicate milestones by canonical code (e.g., M-01 to M-04)
+    canon_map = {}
+    for ms in source_milestones:
+        raw_id = ms.get('id') or ms.get('milestone_code') or ''
+        m_code_m = re.search(r'(M-0[1-9]|M[0-9]{1,2})', str(raw_id), re.IGNORECASE)
+        c_code = m_code_m.group(1).upper() if m_code_m else str(raw_id).strip()
+        if c_code not in canon_map or (float(ms.get('tranche_amount') or ms.get('amount') or 0.0) > float(canon_map[c_code].get('tranche_amount') or canon_map[c_code].get('amount') or 0.0)):
+            canon_map[c_code] = dict(ms)
+            canon_map[c_code]['canonical_id'] = c_code
+
+    deduped_ms = list(canon_map.values()) if canon_map else source_milestones
+    if deduped_ms and len(deduped_ms) > 0:
+        total_ms = len(deduped_ms)
+        for idx, ms in enumerate(deduped_ms):
+            m_id = ms.get('canonical_id') or ms.get('id') or ms.get('milestone_code') or f'M{idx+1}'
             m_name = ms.get('name', f'Milestone {idx+1}')
-            pct = ms.get('percentage') or ms.get('tranche_amount') or (100.0 / total_ms)
-            p_amt = ms.get('amount') or (planned_val * (pct / 100.0) if planned_val else 0.0)
+            
+            tr_amt = float(ms.get('tranche_amount') or ms.get('amount') or 0.0)
+            pct_val = float(ms.get('percentage') or 0.0)
+
+            if tr_amt > 100.0:
+                p_amt = tr_amt
+                pct = round((p_amt / planned_val) * 100.0, 1) if planned_val else round(100.0 / total_ms, 1)
+            elif pct_val > 0:
+                pct = pct_val
+                p_amt = round(planned_val * (pct / 100.0), 2) if planned_val else 0.0
+            elif tr_amt > 0:
+                pct = tr_amt
+                p_amt = round(planned_val * (pct / 100.0), 2) if planned_val else 0.0
+            else:
+                pct = round(100.0 / total_ms, 1)
+                p_amt = round(planned_val * (pct / 100.0), 2) if planned_val else 0.0
+
             comp = float(ms.get('completion_pct', 0) or 0)
             
             # Dynamic calculation from milestone completion percentage
@@ -2267,11 +2299,33 @@ def get_forecast():
                     "source": "database_cached"
                 })
 
-        # --- Compute live financial variance from Budget table ---
+        # --- Compute live financial variance from Budget table (with dynamic doc hydration) ---
+        import os
+        import re
+
         if project_id:
             latest_b = db.db_session.query(Budget).filter_by(project_id=int(project_id)).order_by(Budget.created_at.desc()).first()
-            total_planned = float(latest_b.planned_spend) if latest_b else 0.0
-            total_actual = float(latest_b.actual_spend) if latest_b else 0.0
+            total_planned = float(latest_b.planned_spend) if latest_b and latest_b.planned_spend else 0.0
+            total_actual = float(latest_b.actual_spend) if latest_b and latest_b.actual_spend else 0.0
+
+            # Dynamic hydration: If budget is missing or zero, parse uploaded documents to dynamically sync
+            if (total_planned == 0.0 or total_actual == 0.0) and db.db_session:
+                from controllers.ingestion_controller import sync_uploaded_doc_telemetry
+                from models.uploaded_document import UploadedDocument
+                p_docs = db.db_session.query(UploadedDocument).filter_by(project_id=int(project_id)).all()
+                for p_doc in p_docs:
+                    clean_fn = p_doc.filename.split('] ')[-1] if '] ' in p_doc.filename else p_doc.filename
+                    cand_p = os.path.join(os.getcwd(), 'uploads', clean_fn)
+                    if os.path.exists(cand_p):
+                        try:
+                            sync_uploaded_doc_telemetry(cand_p, int(project_id))
+                        except Exception as sync_ex:
+                            print(f"[get_forecast] Dynamic doc sync warning: {sync_ex}")
+                latest_b = db.db_session.query(Budget).filter_by(project_id=int(project_id)).order_by(Budget.created_at.desc()).first()
+                if latest_b:
+                    total_planned = float(latest_b.planned_spend or 0.0)
+                    total_actual = float(latest_b.actual_spend or 0.0)
+
             project = db.db_session.query(Project).get(int(project_id))
             project_status_label = f"Execution Phase ({project.name})" if project else "Execution Phase"
         else:
@@ -2288,7 +2342,7 @@ def get_forecast():
 
         current_variance = total_planned - total_actual
 
-        # --- Collect active high/critical risks ---
+        # --- Collect active high/critical risks with hygiene and semantic deduplication ---
         high_critical_risks = []
         if db.db_session:
             risk_query = db.db_session.query(RiskRegister).filter(
@@ -2297,20 +2351,43 @@ def get_forecast():
             )
             if project_id:
                 risk_query = risk_query.filter(RiskRegister.project_id == int(project_id))
-            active_risks = risk_query.limit(10).all()
-            for r in active_risks:
+            all_active_risks = risk_query.all()
+
+            seen_signatures = set()
+            for r in all_active_risks:
+                r_title = (r.title or '').strip()
+                clean_t = re.sub(r'[^\w\s]', '', r_title.lower()).strip()
+                if len(clean_t) < 5 or clean_t in ('item', 'item.', 'none', 'na', 'task', 'risk', 'remediation', 'action'):
+                    continue
+
+                words = [w for w in clean_t.split() if w not in ('the', 'a', 'an', 'in', 'of', 'for', 'to', 'due', 'and')]
+                sig = ' '.join(words[:4]) if len(words) >= 4 else clean_t
+
+                is_duplicate = False
+                for existing_sig in seen_signatures:
+                    if sig in existing_sig or existing_sig in sig or (len(words) >= 3 and any(w in existing_sig for w in words[:3]) and 'latency' in sig and 'latency' in existing_sig):
+                        is_duplicate = True
+                        break
+
+                if is_duplicate:
+                    continue
+
+                seen_signatures.add(sig)
+                fin_impact = float(r.financial_impact) if hasattr(r, 'financial_impact') and r.financial_impact else 0.0
+
                 high_critical_risks.append({
                     "id": r.id,
                     "title": r.title,
                     "severity": r.severity,
-                    "financial_impact": float(r.financial_impact) if hasattr(r, 'financial_impact') and r.financial_impact else 0.0
+                    "financial_impact": fin_impact
                 })
+                if len(high_critical_risks) >= 10:
+                    break
 
         # Extract grounding document context from project's uploaded documents
         doc_snippets = []
         if db.db_session and target_pid:
             try:
-                import os
                 from models.uploaded_document import UploadedDocument
                 from tools.doc_tool import DocTool
                 all_docs = db.db_session.query(UploadedDocument).filter_by(project_id=target_pid).order_by(UploadedDocument.id.desc()).limit(6).all()
@@ -2335,12 +2412,15 @@ def get_forecast():
         agent = PredictiveAgent()
         inputs = {
             "current_variance": float(current_variance),
+            "total_planned": float(total_planned),
+            "total_actual": float(total_actual),
             "risks": high_critical_risks,
             "project_status": project_status_label,
             "document_context": full_doc_context or ""
         }
         
         result = agent.execute(inputs)
+
 
         forecast_payload = {
             **result,

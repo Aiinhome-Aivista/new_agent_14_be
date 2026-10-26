@@ -49,7 +49,8 @@ def init_db(app):
                     read_timeout=300,
                     write_timeout=300,
                     charset='utf8mb4',
-                    autocommit=False
+                    autocommit=False,
+                    client_flag=pymysql.constants.CLIENT.FOUND_ROWS
                 )
 
                 # Enable TCP KeepAlive so remote firewall / NAT / MySQL server does not terminate idle connections

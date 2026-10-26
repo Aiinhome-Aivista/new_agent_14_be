@@ -1,7 +1,11 @@
 import os
+import re
 import json
 import random
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 from orchestrator.workflow import Orchestrator
 from agents.intake_agent.agent import IntakeAgent
 from agents.financial_agent.agent import FinancialAgent
@@ -207,8 +211,10 @@ class IngestionService:
 
         for idx, r in enumerate(detected_risks):
             r_title = r.get("title") if isinstance(r, dict) and r.get("title") else str(r)
-            if not r_title or r_title.lower() in ('total', 'subtotal', 'risk', 'finding', 'item', 'n/a'):
+            clean_check = re.sub(r'[^\w\s]', '', str(r_title).lower()).strip()
+            if not clean_check or clean_check in ('total', 'subtotal', 'risk', 'finding', 'item', 'na', 'none') or len(clean_check) < 5:
                 continue
+
 
             r_id = r.get("id") if isinstance(r, dict) and r.get("id") else None
             r_desc = r.get("description") if isinstance(r, dict) and r.get("description") else r_title

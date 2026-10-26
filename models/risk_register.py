@@ -17,6 +17,29 @@ class RiskRegister(Base):
     jira_issue_key = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    @property
+    def financial_impact(self):
+        """Dynamically parses and extracts dollar financial impact from description, mitigation, or title."""
+        import re
+        text = f"{self.description or ''} {self.mitigation_plan or ''} {self.title or ''}"
+        m = re.search(r'\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|\d+(?:\.\d+)?)\s*([KkMm])?', text)
+        if m:
+            val_str = m.group(1).replace(',', '')
+            try:
+                val = float(val_str)
+                mult = m.group(2)
+                if mult:
+                    if mult.lower() == 'k': val *= 1000
+                    elif mult.lower() == 'm': val *= 1000000
+                return val
+            except Exception:
+                pass
+        return 0.0
+
+    @property
+    def financial_exposure(self):
+        return self.financial_impact
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -29,5 +52,8 @@ class RiskRegister(Base):
             'owner': self.owner or 'Unassigned',
             'mitigation_plan': self.mitigation_plan,
             'jira_issue_key': self.jira_issue_key,
+            'financial_impact': self.financial_impact,
+            'financial_exposure': self.financial_exposure,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+

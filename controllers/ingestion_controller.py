@@ -1,4 +1,6 @@
 import os
+import re
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from services.ingestion_service import IngestionService
 from services.auth_service import require_roles
@@ -100,6 +102,12 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         import re
         from datetime import datetime, timezone
         import db
+        if db.db_session is None:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import scoped_session, sessionmaker
+            from config import Config
+            engine = create_engine(Config.SQLALCHEMY_DATABASE_URI, pool_pre_ping=True)
+            db.db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
         from services.document_parser_service import extract_raw_tables_and_text, extract_budget_telemetry_from_tables, clean_numeric_str
         from models.project_member import ProjectMember
         from models.project_milestone import ProjectMilestone
@@ -249,15 +257,17 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         )
                         db.db_session.add(new_m)
 
-            # D. Milestones Table: ['milestone', 'description' or 'baseline' or 'deliverable']
-            elif 'milestone' in headers or any('milestone' in h for h in headers):
+            # D. Milestones Table: ['milestone', 'description' or 'baseline' or 'deliverable' or 'tranche']
+            elif any('milestone' in h for h in headers) or any('tranche' in h for h in headers) or ('deliverable' in headers and any(k in headers for k in ['id', 'due date', 'criteria', 'tranche', 'amount'])):
                 m_idx = -1
                 for idx, h in enumerate(headers):
-                    if 'milestone' in h or 'code' in h or 'id' in h:
+                    if 'milestone' in h or 'code' in h or h == 'id' or 'deliverable id' in h:
                         m_idx = idx
                         break
-                if m_idx == -1 and 'milestone' in headers:
-                    m_idx = headers.index('milestone')
+                if m_idx == -1 and any('milestone' in h for h in headers):
+                    m_idx = next(i for i, h in enumerate(headers) if 'milestone' in h)
+                elif m_idx == -1 and 'id' in headers:
+                    m_idx = headers.index('id')
 
                 desc_idx = -1
                 target_idx = -1
@@ -265,7 +275,7 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                 tranche_idx = -1
 
                 for idx, h in enumerate(headers):
-                    if any(k in h for k in ['description', 'deliverable', 'name']) and desc_idx == -1:
+                    if any(k in h for k in ['description', 'deliverable', 'name', 'title']) and desc_idx == -1:
                         desc_idx = idx
                     elif any(k in h for k in ['target date', 'forecast', 'baseline', 'due date', 'date', 'target']) and target_idx == -1:
                         target_idx = idx
@@ -313,31 +323,47 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         if m_target and m_target.lower() != 'tbd' and re.search(r'[0-9]{4}', m_target):
                             extracted_target_date = m_target
 
-                        existing_ms = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id, milestone_code=m_code).first()
-                        if existing_ms:
-                            if m_desc:
-                                existing_ms.name = f"{m_code}: {m_desc}"
+                        # Canonicalize milestone code (e.g. 'M-01 (AWS Landing Zone)' -> 'M-01')
+                        m_norm = re.search(r'(M-0[1-9]|M[0-9]{1,2})', m_code, re.IGNORECASE)
+                        canonical_m_code = m_norm.group(1).upper() if m_norm else m_code.strip()
+
+                        existing_list = db.db_session.query(ProjectMilestone).filter(
+                            ProjectMilestone.project_id == project_id,
+                            (ProjectMilestone.milestone_code == canonical_m_code) | 
+                            (ProjectMilestone.milestone_code == m_code) |
+                            (ProjectMilestone.name.like(f"{canonical_m_code}%"))
+                        ).all()
+                        if existing_list:
+                            existing_ms = existing_list[0]
+                            existing_ms.milestone_code = canonical_m_code
+                            if m_desc and (not existing_ms.description or len(m_desc) > len(existing_ms.description or '')):
+                                existing_ms.name = f"{canonical_m_code}: {m_desc}"
                                 existing_ms.description = m_desc
-                            if m_target and m_target != 'TBD':
+                            if m_target and m_target.lower() != 'tbd':
                                 existing_ms.target_date = m_target
-                            existing_ms.status = m_stat
-                            existing_ms.completion_pct = comp_pct
+                            if stat_idx >= 0 and m_stat:
+                                existing_ms.status = m_stat
+                                existing_ms.completion_pct = comp_pct
                             if m_tranche > 0:
                                 existing_ms.tranche_amount = m_tranche
                             existing_ms.sla_score = 96.0 if comp_pct >= 75 else (91.5 if comp_pct >= 50 else 84.0)
                             existing_ms.sla_status = 'Compliant' if comp_pct >= 50 else 'At Risk'
+
+                            # Deduplicate: remove any extra duplicate rows in DB for this canonical code
+                            for dup in existing_list[1:]:
+                                db.db_session.delete(dup)
                         else:
                             new_ms = ProjectMilestone(
                                 project_id=project_id,
-                                milestone_code=m_code,
-                                name=f"{m_code}: {m_desc}" if m_desc else m_code,
+                                milestone_code=canonical_m_code,
+                                name=f"{canonical_m_code}: {m_desc}" if m_desc else canonical_m_code,
                                 description=m_desc,
-                                target_date=m_target,
-                                status=m_stat,
+                                target_date=m_target if (m_target and m_target.lower() != 'tbd') else 'Contract Governed',
+                                status=m_stat if (stat_idx >= 0 and m_stat) else 'In Progress',
                                 completion_pct=comp_pct,
                                 days_left=0 if comp_pct == 100 else 45,
-                                tranche_amount=m_tranche if m_tranche > 0 else 92508.0,
-                                sla_score=96.0 if comp_pct >= 75 else 91.5,
+                                tranche_amount=m_tranche if m_tranche > 0 else 0.0,
+                                sla_score=96.0 if comp_pct >= 75 else (91.5 if comp_pct >= 50 else 84.0),
                                 sla_status='Compliant' if comp_pct >= 50 else 'At Risk'
                             )
                             db.db_session.add(new_ms)
@@ -431,16 +457,25 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                 item_idx = -1
                 sev_idx = -1
                 mit_idx = -1
+                fin_idx = -1
+                stat_idx = -1
+                owner_idx = -1
                 
                 for idx, h in enumerate(headers):
                     if any(k in h for k in ['id', 'code', 'ref', 'key', 'number']):
                         if id_idx == -1: id_idx = idx
                     elif any(k in h for k in ['item', 'title', 'summary', 'description', 'risk', 'finding', 'threat']):
                         if item_idx == -1: item_idx = idx
-                    elif any(k in h for k in ['severity', 'impact', 'level', 'priority']):
+                    elif any(k in h for k in ['severity', 'impact', 'level', 'priority']) and not any(k in h for k in ['$', 'cost', 'exposure', 'financial']):
                         if sev_idx == -1: sev_idx = idx
                     elif any(k in h for k in ['mitigation', 'action', 'resolution', 'response', 'plan']):
                         if mit_idx == -1: mit_idx = idx
+                    elif any(k in h for k in ['financial', 'exposure', '$', 'cost impact', 'loss']):
+                        if fin_idx == -1: fin_idx = idx
+                    elif any(k in h for k in ['status', 'state']):
+                        if stat_idx == -1: stat_idx = idx
+                    elif any(k in h for k in ['owner', 'assigned', 'assignee', 'lead']):
+                        if owner_idx == -1: owner_idx = idx
 
                 all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
                 used_rids = {r.risk_id for r in all_p_risks}
@@ -452,11 +487,15 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                     
                     r_id_raw = cells[id_idx] if id_idx >= 0 and len(cells) > id_idx else ""
                     r_title = cells[item_idx] if item_idx >= 0 and len(cells) > item_idx else (cells[0] if len(cells) > 0 else "")
-                    if not r_title or r_title.lower() in ('total', 'subtotal', 'item', 'risk', 'n/a'):
+                    clean_t_check = re.sub(r'[^\w\s]', '', r_title.lower()).strip()
+                    if not clean_t_check or clean_t_check in ('total', 'subtotal', 'item', 'risk', 'na', 'none') or len(clean_t_check) < 5:
                         continue
                     
                     r_sev_raw = cells[sev_idx] if sev_idx >= 0 and len(cells) > sev_idx else "High"
                     r_mit = cells[mit_idx] if mit_idx >= 0 and len(cells) > mit_idx else "Under PM Review"
+                    r_stat = cells[stat_idx] if stat_idx >= 0 and len(cells) > stat_idx else "Open"
+                    r_own = cells[owner_idx] if owner_idx >= 0 and len(cells) > owner_idx else "Connector Sync"
+                    r_fin = cells[fin_idx] if fin_idx >= 0 and len(cells) > fin_idx else ""
                     
                     # Normalize severity
                     r_sev = "Medium"
@@ -467,38 +506,53 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                     elif any(k in r_sev_raw.lower() for k in ['low', 'minor']):
                         r_sev = "Low"
 
-                    # Assign or normalize risk ID
-                    assigned_rid = r_id_raw if (r_id_raw and len(r_id_raw) >= 3 and not r_id_raw.isdigit()) else None
-                    if not assigned_rid or assigned_rid in used_rids:
-                        next_n = 1
-                        while f"RSK-{next_n:03d}" in used_rids:
-                            next_n += 1
-                        assigned_rid = f"RSK-{next_n:03d}"
-                    used_rids.add(assigned_rid)
-
-                    # Deduplicate by title or ID
+                    # Check for existing risk first by raw ID, exact title, or semantic keyword overlap
                     existing_r = None
-                    clean_t = r_title.strip().lower()
+                    clean_t = re.sub(r'[^\w\s]', '', r_title.lower()).strip()
+                    clean_words = set(w for w in clean_t.split() if w not in ('the', 'a', 'an', 'in', 'of', 'for', 'to', 'due', 'and', 'from', 'with'))
+
                     for pr in all_p_risks:
-                        pr_t = (pr.title or "").strip().lower()
-                        if pr.risk_id == assigned_rid or pr_t == clean_t or (len(clean_t) > 12 and (clean_t in pr_t or pr_t in clean_t)):
+                        if r_id_raw and pr.risk_id and pr.risk_id.strip().lower() == r_id_raw.strip().lower():
                             existing_r = pr
                             break
+                        pr_clean = re.sub(r'[^\w\s]', '', (pr.title or '').lower()).strip()
+                        if pr_clean == clean_t or (len(clean_t) > 12 and (clean_t in pr_clean or pr_clean in clean_t)):
+                            existing_r = pr
+                            break
+                        pr_words = set(w for w in pr_clean.split() if w not in ('the', 'a', 'an', 'in', 'of', 'for', 'to', 'due', 'and', 'from', 'with'))
+                        overlap = clean_words.intersection(pr_words)
+                        if len(overlap) >= 3 and any(k in overlap for k in ['latency', 'gpu', 'sla', 'contingency', 'reconciliation']):
+                            existing_r = pr
+                            break
+
+                    desc_str = f"{r_title} (Extracted from {os.path.basename(file_path)})"
+                    if r_fin:
+                        desc_str = f"[Financial Impact: {r_fin}] {desc_str}"
 
                     if existing_r:
                         existing_r.title = r_title
                         existing_r.severity = r_sev
                         if r_mit and r_mit != "Under PM Review":
                             existing_r.mitigation_plan = r_mit
+                        if r_fin and not any(k in str(existing_r.description) for k in ['$', 'Financial Impact']):
+                            existing_r.description = f"[Financial Impact: {r_fin}] {existing_r.description}"
                     else:
+                        assigned_rid = r_id_raw if (r_id_raw and len(r_id_raw) >= 3 and not r_id_raw.isdigit() and r_id_raw not in used_rids) else None
+                        if not assigned_rid:
+                            next_n = 1
+                            while f"RSK-{next_n:03d}" in used_rids:
+                                next_n += 1
+                            assigned_rid = f"RSK-{next_n:03d}"
+                        used_rids.add(assigned_rid)
+
                         new_r = RiskRegister(
                             project_id=project_id,
                             risk_id=assigned_rid,
                             title=r_title,
-                            description=f"{r_title} (Extracted from {os.path.basename(file_path)})",
+                            description=desc_str,
                             severity=r_sev,
-                            status="Open",
-                            owner="Connector Sync",
+                            status=r_stat if r_stat in ('Open', 'Mitigated', 'Closed') else 'Open',
+                            owner=r_own,
                             mitigation_plan=r_mit,
                             created_at=datetime.now(timezone.utc)
                         )
@@ -508,18 +562,42 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
 
         # Check paragraphs for structured risk patterns if no tabular risks found
         if risks_count == 0:
-            from models.risk_register import RiskRegister
-            all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
-            used_rids = {r.risk_id for r in all_p_risks}
-            for p in paragraphs:
-                p_m = re.search(r'\[?(RISK-[A-Za-z0-9\-]+)\]?[:\s]+([^\n\r]+)', p, re.IGNORECASE)
-                if p_m:
-                    p_rid = p_m.group(1).upper()
-                    p_title = p_m.group(2).strip()
-                    if not any(pr.risk_id == p_rid for pr in all_p_risks):
+            try:
+                from models.risk_register import RiskRegister
+                all_p_risks = db.db_session.query(RiskRegister).filter_by(project_id=project_id).all()
+                used_rids = {r.risk_id for r in all_p_risks}
+                for p in paragraphs:
+                    p_m = re.search(r'\[?((?:RISK|RSK|R|PRED-THR)-[0-9]{1,4})\]?[:\s\-]+([^\n\r]+)', p, re.IGNORECASE)
+                    if p_m:
+                        p_rid = p_m.group(1).upper()[:50]
+                        p_title = p_m.group(2).strip()
+                        # Clean leading and trailing punctuation, noise tokens, or reference prefixes
+                        p_title = re.sub(r'^[/\s\-:()\[\]]+', '', p_title).strip()
+                        if p_title.lower().startswith('threat '):
+                            p_title = p_title[7:].strip()
+                        p_title = re.sub(r'[)\]]+$', '', p_title).strip()
+                        if p_title.startswith('(') and ')' in p_title:
+                            p_title = p_title[1:p_title.index(')')].strip()
+                        clean_t = re.sub(r'[^\w\s]', '', p_title.lower()).strip()
+                        if len(clean_t) < 8 or clean_t in ('item', 'none', 'na', 'task', 'risk', 'remediation', 'action', 'threat'):
+                            continue
+
+                        # Semantic deduplication against existing risks
+                        is_dup = False
+                        for pr in all_p_risks:
+                            pr_clean = re.sub(r'[^\w\s]', '', (pr.title or '').lower()).strip()
+                            if clean_t in pr_clean or pr_clean in clean_t:
+                                is_dup = True
+                                break
+                            if p_rid and pr.risk_id and p_rid == pr.risk_id:
+                                is_dup = True
+                                break
+                        if is_dup:
+                            continue
+
                         new_r = RiskRegister(
                             project_id=project_id,
-                            risk_id=p_rid,
+                            risk_id=p_rid[:50],
                             title=p_title[:255],
                             description=p_title,
                             severity="High",
@@ -532,30 +610,50 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                         all_p_risks.append(new_r)
                         used_rids.add(p_rid)
                         risks_count += 1
+                db.db_session.commit()
+            except Exception as r_err:
+                db.db_session.rollback()
+                print(f"[sync_uploaded_doc_telemetry] Risk paragraph extraction error: {r_err}")
 
-        # 1.5 Extract structured budget categories and line items
-        doc_budget = extract_budget_telemetry_from_tables(tables, paragraphs)
-        if doc_budget.get('categories_raw') and parsed_budget_planned is None:
-            parsed_budget_planned = sum(c['planned'] for c in doc_budget['categories_raw'])
+        # 1.5 Extract structured budget categories, line items, and totals
+        try:
+            doc_budget = extract_budget_telemetry_from_tables(tables, paragraphs)
+            doc_totals = doc_budget.get('totals') or {}
+            if doc_totals.get('planned') and (parsed_budget_planned is None or parsed_budget_planned == 0.0):
+                parsed_budget_planned = doc_totals['planned']
+            if doc_totals.get('actual') and (parsed_budget_actual is None or parsed_budget_actual == 0.0):
+                parsed_budget_actual = doc_totals['actual']
+            if doc_totals.get('variance') and parsed_budget_variance is None:
+                parsed_budget_variance = doc_totals['variance']
 
-        # 2. Update or Insert Budget record if extracted
-        if parsed_budget_planned is not None:
-            existing_b = db.db_session.query(Budget).filter_by(project_id=project_id).first()
-            if existing_b:
-                existing_b.planned_spend = parsed_budget_planned
-                if parsed_budget_actual is not None and parsed_budget_actual > 0:
-                    existing_b.actual_spend = parsed_budget_actual
-                existing_b.variance = float(existing_b.planned_spend) - float(existing_b.actual_spend)
-            else:
-                actual_val = parsed_budget_actual if parsed_budget_actual is not None else 0.0
-                new_b = Budget(
-                    project_id=project_id,
-                    period="FY 2026-2027",
-                    planned_spend=parsed_budget_planned,
-                    actual_spend=actual_val,
-                    variance=parsed_budget_planned - actual_val
-                )
-                db.db_session.add(new_b)
+            if doc_budget.get('categories_raw') and parsed_budget_planned is None:
+                parsed_budget_planned = sum(c['planned'] for c in doc_budget['categories_raw'])
+
+            # 2. Update or Insert Budget record if extracted
+            if parsed_budget_planned is not None or parsed_budget_actual is not None:
+                existing_b = db.db_session.query(Budget).filter_by(project_id=project_id).first()
+                if existing_b:
+                    if parsed_budget_planned is not None and parsed_budget_planned > 0:
+                        existing_b.planned_spend = parsed_budget_planned
+                    if parsed_budget_actual is not None and parsed_budget_actual > 0:
+                        existing_b.actual_spend = parsed_budget_actual
+                    existing_b.variance = float(existing_b.planned_spend or 0.0) - float(existing_b.actual_spend or 0.0)
+                else:
+                    pl_val = parsed_budget_planned if parsed_budget_planned is not None else 0.0
+                    actual_val = parsed_budget_actual if parsed_budget_actual is not None else 0.0
+                    new_b = Budget(
+                        project_id=project_id,
+                        period="FY 2026-2027",
+                        planned_spend=pl_val,
+                        actual_spend=actual_val,
+                        variance=pl_val - actual_val
+                    )
+                    db.db_session.add(new_b)
+                db.db_session.commit()
+        except Exception as b_err:
+            db.db_session.rollback()
+            print(f"[sync_uploaded_doc_telemetry] Budget sync error: {b_err}")
+
 
         # 3. Ensure some foundational tasks reflect actual delivered deliverables
         p_ms_delivered = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id, completion_pct=100).count()
@@ -581,7 +679,13 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         team_payload = [m.to_dict() for m in all_members] if all_members else []
         
         all_milestones = db.db_session.query(ProjectMilestone).filter_by(project_id=project_id).all()
-        milestones_payload = [m.to_dict() for m in all_milestones] if all_milestones else []
+        canon_ms_map = {}
+        for m in all_milestones:
+            m_code_m = re.search(r'(M-0[1-9]|M[0-9]{1,2})', str(m.milestone_code or m.name), re.IGNORECASE)
+            c_code = m_code_m.group(1).upper() if m_code_m else (m.milestone_code or '').strip()
+            if c_code not in canon_ms_map or (float(m.tranche_amount or 0.0) > float(canon_ms_map[c_code].get('tranche_amount') or 0.0)):
+                canon_ms_map[c_code] = m.to_dict()
+        milestones_payload = list(canon_ms_map.values()) if canon_ms_map else [m.to_dict() for m in all_milestones]
 
         telemetry_payload = {
             "project_id": project_id,
@@ -605,19 +709,35 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
             }
         }
 
-        if existing_tel:
-            curr_data = existing_tel.telemetry_data if isinstance(existing_tel.telemetry_data, dict) else {}
-            curr_data.update(telemetry_payload)
-            existing_tel.telemetry_data = curr_data
-        else:
-            new_tel = ProjectTelemetry(
-                project_id=project_id,
-                telemetry_data=telemetry_payload
-            )
-            db.db_session.add(new_tel)
+        try:
+            if existing_tel:
+                from sqlalchemy.orm.attributes import flag_modified
+                curr_data = dict(existing_tel.telemetry_data or {})
+                for k, v in telemetry_payload.items():
+                    if k in ('budget_categories', 'budget_line_items'):
+                        if v:  # Only overwrite if new document actually has categories/line items
+                            curr_data[k] = v
+                    elif k in ('team', 'milestones'):
+                        if v:  # Only overwrite if new document actually has team/milestones
+                            curr_data[k] = v
+                    else:
+                        curr_data[k] = v
+                existing_tel.telemetry_data = curr_data
+                flag_modified(existing_tel, 'telemetry_data')
+            else:
+                new_tel = ProjectTelemetry(
+                    project_id=project_id,
+                    telemetry_data=telemetry_payload
+                )
+                db.db_session.add(new_tel)
 
-        db.db_session.commit()
+            db.db_session.commit()
+        except Exception as tel_err:
+            db.db_session.rollback()
+            print(f"[sync_uploaded_doc_telemetry] Telemetry commit warning: {tel_err}")
+
         return risks_count
+
     except Exception as e:
         print(f"[sync_uploaded_doc_telemetry] Error saving doc telemetry to MySQL: {e}")
         return risks_count
@@ -691,6 +811,8 @@ def run_project_predictive_forecast(project_id: int, document_path: str = None):
         agent = PredictiveAgent()
         inputs = {
             "current_variance": float(current_variance),
+            "total_planned": float(total_planned),
+            "total_actual": float(total_actual),
             "risks": high_critical,
             "project_status": f"Execution Phase ({proj_name})",
             "document_context": full_doc_context or ""

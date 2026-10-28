@@ -134,6 +134,31 @@ def get_guardrails():
     run_logs = db.db_session.query(AgentRunLog).order_by(AgentRunLog.created_at.desc()).limit(15).all()
     audit_data = [log.to_dict() for log in run_logs]
     
+    # Compute dynamic compliance & audit coverage score
+    from models.project_telemetry import ProjectTelemetry
+    compliance_score = 92
+    if active_project:
+        try:
+            pt = db.db_session.query(ProjectTelemetry).filter_by(project_id=active_project.id).first()
+            if pt and pt.telemetry_data:
+                gov = pt.telemetry_data.get('governance', {})
+                if isinstance(gov, dict) and gov.get('compliance_audit_score'):
+                    compliance_score = int(gov.get('compliance_audit_score'))
+        except Exception:
+            pass
+    elif db.db_session:
+        try:
+            all_pts = db.db_session.query(ProjectTelemetry).all()
+            scores = []
+            for p_tel in all_pts:
+                gov = (p_tel.telemetry_data or {}).get('governance', {})
+                if isinstance(gov, dict) and gov.get('compliance_audit_score'):
+                    scores.append(float(gov.get('compliance_audit_score')))
+            if scores:
+                compliance_score = int(round(sum(scores) / len(scores)))
+        except Exception:
+            pass
+
     return jsonify({
         "policies": policy_data,
         "approval_queue": queue_data,
@@ -144,6 +169,7 @@ def get_guardrails():
             "project_policies_count": len([p for p in policy_data if not p.get("is_global")]),
             "global_policies_count": len([p for p in policy_data if p.get("is_global")]),
             "pending_approvals": len([q for q in queue_data if q.get("status") == "Pending"]),
+            "compliance_score": compliance_score,
             "total_audits": len(audit_data),
             "project_name": active_project.name if active_project else "Enterprise Portfolio",
             "project_key": active_project.jira_key if active_project else "ALL"

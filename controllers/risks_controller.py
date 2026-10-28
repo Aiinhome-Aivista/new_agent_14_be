@@ -36,27 +36,33 @@ def enrich_risk_dict(r, project_map=None):
     else:
         d['category'] = 'Architecture & Tech'
 
+    # Extract dynamic financial exposure directly from document text if present
+    import re
+    full_text = f"{r.title or ''} {r.description or ''}"
+    exp_match = re.search(r'(?:impact|exposure|budget|cost|drawdown|holdback|overrun|spend)?\s*(?:of|:)?\s*(\$[\d,]+(?:\.\d+)?(?:\s*[kKmM])?)', full_text, re.IGNORECASE)
+    exact_exposure = exp_match.group(1).strip() if exp_match else None
+
     # Risk score & exposure
     sev = str(r.severity).capitalize()
     if sev == 'Critical':
         d['risk_score'] = 9.2
         d['probability'] = 'High'
-        d['financial_exposure'] = '$350K - $500K'
+        d['financial_exposure'] = exact_exposure or '$75,000'
         d['impact_label'] = 'Halts Release Gate'
     elif sev == 'High':
         d['risk_score'] = 7.5
         d['probability'] = 'Medium'
-        d['financial_exposure'] = '$120K - $250K'
+        d['financial_exposure'] = exact_exposure or '$45,000'
         d['impact_label'] = 'Elevated PMO Attention'
     elif sev == 'Medium':
         d['risk_score'] = 5.0
         d['probability'] = 'Medium'
-        d['financial_exposure'] = '$40K - $100K'
+        d['financial_exposure'] = exact_exposure or '$40K - $100K'
         d['impact_label'] = 'Monitored by Lead'
     else:
         d['risk_score'] = 3.0
         d['probability'] = 'Low'
-        d['financial_exposure'] = '< $40K'
+        d['financial_exposure'] = exact_exposure or '< $40K'
         d['impact_label'] = 'Controlled Baseline'
 
     return d

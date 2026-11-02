@@ -1881,7 +1881,8 @@ def get_project_details(project_id):
         "risk_details": enriched_project_risks,
         "recent_risks": enriched_project_risks[:5],
         "total_project_risks": len(risks),
-        "tasks": [t.to_dict() for t in db_tasks_all]
+        # Prioritize canonical Jira tasks from JIRA EXPORT and real meeting action items
+        "tasks": [t.to_dict() for t in ([tk for tk in db_tasks_all if (tk.jira_key and tk.jira_key.startswith(str(project.jira_key))) or (tk.jira_key and 'AI-' in str(tk.summary))] or db_tasks_all)]
     }
 
     team_data = get_project_team_data(project.id)
@@ -2049,6 +2050,7 @@ def get_project_details(project_id):
 
 
 def get_project_team_data(project_id):
+    import re
     """
     Returns single-source-of-truth project team telemetry:
     - Extracts high-fidelity team from project document telemetry (SOW/Charter) if available.
@@ -2241,13 +2243,13 @@ def get_project_team_data(project_id):
         for code in sorted(member_ms_codes):
             if code in ms_by_code:
                 m_obj = ms_by_code[code]
-                c_name = m_obj.name.strip()
-                if c_name.startswith(f"{code}:"):
-                    member_linked_milestones.append(c_name)
-                else:
-                    member_linked_milestones.append(f"{code}: {c_name}")
+                c_clean = re.sub(r'^(M-0[1-9]|PH-0[1-9]|M[0-9]{1,2})[:\s\-]+', '', m_obj.name.strip()).strip()
+                member_linked_milestones.append(f"{code}: {c_clean}")
             else:
                 member_linked_milestones.append(f"{code}: Governed Stage-Gate")
+
+        # Deduplicate preserving order
+        member_linked_milestones = list(dict.fromkeys(member_linked_milestones))
 
         if not member_linked_milestones:
             member_linked_milestones = ["M-03: AI Predictive Engine & Platform UI Integration"]

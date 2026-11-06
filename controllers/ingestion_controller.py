@@ -838,18 +838,18 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
         milestones_payload = list(canon_ms_map.values()) if canon_ms_map else [m.to_dict() for m in all_milestones]
 
         timeline_payload = {
-            "start_date": extracted_start_date or "August 1, 2026",
-            "target_date": target_final_date or "May 15, 2027",
-            "total_months": extracted_total_months if extracted_total_months > 0 else 9.0,
-            "elapsed_months": extracted_elapsed_months if extracted_elapsed_months > 0 else 5.3,
-            "percentage": round(((extracted_elapsed_months or 5.3) / (extracted_total_months or 9.0)) * 100)
+            "start_date": extracted_start_date,
+            "target_date": target_final_date,
+            "total_months": extracted_total_months if extracted_total_months > 0 else 0,
+            "elapsed_months": extracted_elapsed_months if extracted_elapsed_months > 0 else 0,
+            "percentage": round(((extracted_elapsed_months) / (extracted_total_months)) * 100)
         }
 
         telemetry_payload = {
             "project_id": project_id,
             "target_date": target_final_date,
             "target_go_live": target_final_date,
-            "overall_status": extracted_overall_status or "Active",
+            "overall_status": extracted_overall_status,
             "team": team_payload,
             "milestones": milestones_payload,
             "timeline": timeline_payload,
@@ -859,7 +859,7 @@ def sync_uploaded_doc_telemetry(file_path, project_id):
                 "vendor_sla_adherence": 94.2,
                 "compliance_audit_score": 96.0,
                 "compliance_gate": "Gate 3 Approved",
-                "trajectory": f"{extracted_overall_status or 'Active'} & Governed (SteerCo Approved)"
+                "trajectory": f"{extracted_overall_status} & Governed (SteerCo Approved)"
             },
             "custom_attributes": {
                 "source": "SteerCo MOM, SOW & Architecture Audit",

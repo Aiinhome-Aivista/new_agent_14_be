@@ -227,18 +227,17 @@ def build_pmo_metrics(active_project, all_projs, total_planned, total_actual, to
                 active_allocs = [float(m.get('allocation_pct') or 100.0) for m in team_list if m.get('is_active_today', True)]
                 util_rate = round(sum(active_allocs) / len(active_allocs), 1) if active_allocs else 0.0
 
-                # Dynamic Target Completion Date & Days Remaining from milestones
+                # Dynamic Target Completion Date & Days Remaining from last milestone (consistent with drilldown)
                 target_date = None
-                from models.project_telemetry import ProjectTelemetry
-                p_tel_record = db.db_session.query(ProjectTelemetry).filter_by(project_id=active_project.id).first() if db.db_session else None
-                if p_tel_record and isinstance(p_tel_record.telemetry_data, dict):
-                    target_date = p_tel_record.telemetry_data.get('target_date') or p_tel_record.telemetry_data.get('target_go_live')
-
-                if not target_date:
-                    p_ms = db.db_session.query(ProjectMilestone).filter_by(project_id=active_project.id).all() if db.db_session else []
-                    valid_dates = [ms.target_date for ms in p_ms if ms.target_date and ms.target_date.lower() not in ('tbd', 'completed', 'in progress', 'upcoming', 'pending', '')]
-                    if valid_dates:
-                        target_date = valid_dates[-1]
+                p_ms = db.db_session.query(ProjectMilestone).filter_by(project_id=active_project.id).order_by(ProjectMilestone.id.asc()).all() if db.db_session else []
+                valid_dates = [ms.target_date for ms in p_ms if ms.target_date and ms.target_date.lower() not in ('tbd', 'completed', 'in progress', 'upcoming', 'pending', '')]
+                if valid_dates:
+                    target_date = valid_dates[-1]
+                else:
+                    from models.project_telemetry import ProjectTelemetry
+                    p_tel_record = db.db_session.query(ProjectTelemetry).filter_by(project_id=active_project.id).first() if db.db_session else None
+                    if p_tel_record and isinstance(p_tel_record.telemetry_data, dict):
+                        target_date = p_tel_record.telemetry_data.get('target_date') or p_tel_record.telemetry_data.get('target_go_live')
 
                 if not target_date:
                     target_date = "Pending Schedule Baseline"
@@ -2039,6 +2038,41 @@ def get_project_details(project_id):
             "percentage": timeline_pct
         }
     }
+
+    # Dynamic Level 4 Governance & SLA Telemetry
+    doc_gov = (doc_telemetry.get('governance', {}) if isinstance(doc_telemetry, dict) else {}) or {}
+
+    valid_sla_scores = [float(ms.sla_score) for ms in p_milestones if ms.sla_score is not None]
+    if not valid_sla_scores and phases:
+        valid_sla_scores = [float(p.get('sla_score')) for p in phases if p.get('sla_score') is not None]
+
+    if valid_sla_scores:
+        sla_adherence = round(sum(valid_sla_scores) / len(valid_sla_scores), 1)
+    elif doc_gov.get('vendor_sla_adherence') is not None:
+        sla_adherence = float(doc_gov['vendor_sla_adherence'])
+    else:
+        sla_adherence = 100.0 if is_new else 95.0
+
+    if doc_gov.get('compliance_audit_score') is not None and not crit and not high:
+        audit_score = float(doc_gov['compliance_audit_score'])
+    else:
+        audit_score = max(50, round(100.0 - (len(crit) * 12.0 + len(high) * 5.0)))
+
+    open_escalations = len(crit) + (1 if cost_variance < 0 and actual_val > 0 else 0)
+
+    if len(crit) == 0:
+        gate_status = doc_gov.get('compliance_gate') or "Gate 3 Approved"
+    else:
+        gate_status = "Gate 3 Conditional Review"
+
+    gov_payload = {
+        "vendor_sla_adherence": sla_adherence,
+        "compliance_audit_score": audit_score,
+        "open_escalations": open_escalations,
+        "gate_clearance_status": gate_status
+    }
+    project_data["governance_summary"] = gov_payload
+    project_data["governance"] = gov_payload
 
     try:
         project_data["mitigation_plan"] = generate_or_get_mitigation_plan(project.id, refresh=False)
